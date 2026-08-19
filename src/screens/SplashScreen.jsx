@@ -1,4 +1,4 @@
-import logo from '../assets/cadence-logo.svg'
+import logo from '../assets/cadence-logo.png'
 
 export default function SplashScreen() {
   return (

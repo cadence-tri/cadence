@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Poppins", system-ui, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  /* Cadence brand tokens — see AppTheme.swift in the native app */
+  --color-main-text: #181818;
+  --color-minor-text: #a7a289;
+  --color-panel: #f5f3e5;
+  --color-background: #fffef5;
+  --color-accent: #ff6858;
+
+  /* Per-discipline chart colors — shades of the brand coral, consistent
+     across charts and small UI accents so a discipline reads the same
+     color everywhere. */
+  --color-disc-run: #ff6858;
+  --color-disc-swim: #ff8f82;
+  --color-disc-bike: #e14a3b;
+  --color-disc-brick: #ffafa5;
+  --color-disc-gym: #b23425;
+  --color-disc-rest: #d8d3c2;
+  --color-disc-other: #7a1f14;
+
+  /* Per-phase colors */
+  --color-phase-buildup: #8fa998;
+  --color-phase-endurance: #5b8dbe;
+  --color-phase-peak: #ff6858;
+  --color-phase-taper: #c9a24b;
+  --color-phase-recovery: #7fbfa0;
+  --color-phase-maintenance: #a7a289;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  background: var(--color-background);
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--color-main-text);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+/* Hide number input spinners for a cleaner compact-field look, matching
+   the native app's plain-text-field appearance. */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}

@@ -1,0 +1,463 @@
+# Training Plan Format — Governance Document
+
+**Purpose:** every plan written in this project has two audiences at once —
+Matteo, reading prose, and the TriathlonLog app, parsing JSON. This document
+is the single source of truth for that dual structure. Read it before
+writing or editing any plan file. If the schema ever needs to change,
+update this document **and** the app's `TrainingSession.swift` /
+`MarkdownImporter.swift` in the same pass — they must never drift apart.
+
+`Hamburg_2027_Plan_Weeks_3-4.md` (as of this document) is the canonical
+worked example. When in doubt, match its structure.
+
+---
+
+## 1. File-level structure
+
+Every plan file is markdown, written for a human first. Machine-parseable
+data is embedded, not separate. The recurring shape:
+
+````
+# <Plan title>
+
+**Athlete:** ...
+**Goals:** ...
+**Approach:** ...            (only in the season-roadmap file)
+
+## Macro Roadmap              (only in the season-roadmap file — a table of
+                               phases, windows, durations, and focus)
+
+## Nutrition                  (as needed)
+
+## Week N (date range) — <short goal line>
+**Phase:** <phase name>       ← only needed once per file/section if it's
+                                  obvious from context; the JSON `phase`
+                                  field is the one the app actually reads,
+                                  this heading is for the human reader
+
+<day-by-day prose: headers, bullet lists of prescribed work>
+
+```session
+[ ... one JSON object per session that day, for the whole week ... ]
+```
+
+## Week N+1 ...
+<same pattern, own ```session block>
+
+## Notes
+<free-text coaching notes, questions for next check-in, etc.>
+````
+
+Rules:
+- **One `session` fenced block per week**, placed right after that week's
+  prose (not interleaved per-day — see `Hamburg_2027_Plan_Weeks_3-4.md`).
+- The block is a JSON **array**, even for weeks with only one session on
+  some days — consistency matters more than minimalism.
+- A day with two sessions (e.g. swim + gym) gets **two array items**
+  sharing the same `date`. A day with a "choose one" alternative (e.g.
+  long run vs. long bike) also gets two array items sharing the same
+  `date`, distinguished by title ("Option A" / "Option B") and a `notes`
+  string telling the athlete to pick one.
+- **Never put literal triple-backticks in the surrounding prose.** They
+  prematurely close or merge fences and break parsing. Refer to the block
+  in words ("a hidden session block") if you need to mention it at all.
+
+---
+
+## 2. The session object — field reference
+
+Every item in a week's JSON array is one session:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `date` | string `"YYYY-MM-DD"` | **yes** | Exact ISO date, no time component. |
+| `discipline` | string | **yes** | One of: `swim`, `bike`, `run`, `brick`, `gym`, `rest`, `other`. Case-insensitive on import, but always write lowercase. Anything else imports under "Other" with a warning — never silently dropped, but also never what you want on purpose. |
+| `title` | string | **yes** | Short, human-readable. **Keep stable across re-imports of the same day** — the app de-duplicates on `date + discipline + title`; changing the title for an already-imported day creates a duplicate instead of updating it. |
+| `phase` | string | recommended | The macro training phase this week belongs to. Must exactly match one of the six governed phase names (§3). Omit only for one-off/ungoverned content; every regular week should have it. |
+| `weekLabel` | string | recommended | E.g. `"Week 3"`. Matches the `## Week N` heading. |
+| `totalDistance` | number | **yes**, for `swim`/`bike`/`run` | Total distance for the *whole session*, not a single rep — see below. Omit for `gym`/`rest`/`other`; for `brick`, only include it if the whole session is one clean unit (rare — usually skip it and let the per-segment distances in `sets` carry the detail instead). |
+| `notes` | string | optional | Coach context for this specific session (form cues, "choose one" instructions, injury flags, etc). |
+| `sets` | array of set objects | optional | The structured prescription. Omit or leave empty for a plain rest day with no structured content. |
+
+**`totalDistance` units are discipline-dependent — this is the one field
+in the schema where that's true, so don't default to meters everywhere
+out of habit:**
+
+- `bike` and `run`: **kilometers**, e.g. `10` for a 10km run, `42.195`
+  for a full marathon.
+- `swim`: **meters**, e.g. `1500` for a 1500m swim, matching how the
+  athlete already logs pool distance and how `sets[].distanceM` is
+  already written.
+
+This is deliberately a *whole-session* total, separate from any per-rep
+`distanceM` values inside `sets` (§4). A session's `sets` frequently only
+cover part of the prescribed distance — warm-up/cool-down or "easy"
+portions are often written as `duration` (time) rather than `distanceM`,
+so summing `sets[].distanceM` under-counts what the athlete actually
+covered. `totalDistance` is what the app's Stats weekly-volume charts
+read; without it, a swim/bike/run session won't show up in that chart at
+all (it falls back to a rougher, duration-based estimate instead — see
+§5). Always include it for swim/bike/run, even when it's an estimate
+(e.g. "~10km" in the prose becomes `"totalDistance": 10` in the JSON —
+drop the `~` and unit, keep the number).
+
+Canonical field order (cosmetic only, but keep it consistent for
+readability): `date`, `phase`, `discipline`, `title`, `weekLabel`,
+`totalDistance`, `notes`, `sets`.
+
+---
+
+## 3. Phase names — the governed list
+
+`phase` must be exactly one of these six values (case/spacing-insensitive on
+import — see the app's `TrainingPhase.parse` — but always write it in this
+canonical form in plan files):
+
+- `Build-up`
+- `Endurance`
+- `Peak`
+- `Taper`
+- `Recovery`
+- `Maintenance`
+
+This is the one list, used the same way whether the block is a marathon or
+an Olympic-triathlon build — the macro-cycle shape doesn't depend on
+discipline, so there is deliberately no separate phase vocabulary per sport.
+`Maintenance` is also the app's default for any week nobody has explicitly
+labelled — don't rely on that default in a plan file; set the field
+explicitly on at least one session per week regardless of phase.
+
+This list is a closed set matching the app's `TrainingPhase` enum
+(`Models/WeekPhase.swift`) exactly, case for case. If it ever needs to
+change — a phase renamed, split, or added — update this list **and** the
+Swift `TrainingPhase` enum (plus `TrainingPhase.color` in `AppTheme.swift`)
+in the same pass; they must never drift apart. Do not reintroduce a
+per-discipline or per-roadmap-phase vocabulary (e.g. "Marathon-Specific
+Build" vs "Triathlon-Specific Build") without updating both sides together.
+
+**Recovery-week check:** if a plan spans 14 or more consecutive weeks with
+no week labelled `Recovery`, `Maintenance`, or `Taper` anywhere in that
+span, flag this to the athlete before finalizing the plan and suggest
+scheduling one or two easier weeks — training blocks this long without a
+deload are a known overtraining risk. (The app also surfaces this as a
+banner on the Overview tab if it's missed here.)
+
+---
+
+## 4. The set object — field reference
+
+Every item in a session's `sets` array is one prescribed line:
+
+| Field | Type | Applies to | Notes |
+|---|---|---|---|
+| `exercise` | string | all | Name of the drill/lift/segment, e.g. `"Squat"`, `"Freestyle"`, `"Warm up spin"`. |
+| `setsCount` | int | mainly gym, also swim reps | The "3" in "3x8". |
+| `reps` | int | mainly gym | The "8" in "3x8". |
+| `weightKg` | number | gym | Load. Use a plain number, not a string — `65`, not `"65kg"`. |
+| `distanceM` | number | swim/run/bike | Distance of this rep/segment in **meters**, plain number. |
+| `duration` | string | all, esp. time-based work | Free text like `"20'"`, `"15'"`, `"20-25'"` (ranges get averaged by the app). Always use a trailing `'` for minutes and `"` for seconds, matching the athlete's existing shorthand. |
+| `paceOrPower` | string | endurance | E.g. `"5'40\"/km"`, `"180W"`, `"~2'00\"/100m"`. |
+| `rest` | string | interval work | E.g. `"15\""`, `"2' rest"`, `"as needed"`. |
+| `notes` | string | any | Per-line detail that doesn't fit elsewhere (e.g. "per side", "after 10x40kg WU"). |
+
+All set fields are optional — use whichever apply. A rest-day mobility
+line might only have `exercise` + `duration` + `notes`; a squat working
+set will have `exercise`, `setsCount`, `reps`, `weightKg`, and often a
+`notes` on the warm-up.
+
+**JSON string escaping:** any `"` inside a string value (feet/inches-style
+time notation, e.g. `20"` for seconds) must be escaped as `\"`. This is
+standard JSON, not a special app requirement, but it's the single most
+common syntax slip when transcribing the athlete's own shorthand — always
+double-check before shipping a plan.
+
+---
+
+## 5. Why the schema is shaped this way (context for future edits)
+
+- **Every set field is optional, one shape covers all disciplines.** This
+  was a deliberate simplification so the app's data model (`SessionSet`)
+  doesn't need a different type per discipline. Don't invent
+  discipline-specific fields (e.g. `strokeCount` for swim) without
+  updating both this doc and the Swift model — and consider first whether
+  an existing field (`notes`) can carry it instead.
+- **`duration` is a string, not a number.** The athlete's own shorthand
+  (`"20-25'"`) is a range, and forcing it into a single number would lose
+  information. The app parses this leniently for stats (`SessionSet.
+  durationMinutes`) — ranges get averaged.
+- **De-dup key is `date + discipline + title`.** This makes re-importing
+  an updated file for weeks already logged safe (new/changed sessions get
+  added, unchanged ones are skipped) — but it means the title is load-
+  bearing, not just cosmetic. Don't casually reword a title on a
+  re-generated week if the athlete may have already imported the old one.
+- **Unrecognized `discipline` values import under "Other," never crash or
+  drop.** If you're tempted to introduce a discipline not in the governed
+  list (§2), that's a schema change — update the Swift `Discipline` enum
+  and this document together, don't just start emitting a new string.
+- **`totalDistance` is session-level and unit-varies by discipline, on
+  purpose.** Stats used to sum `sets[].distanceM` for weekly volume, but
+  that quietly under-counted real distance — plenty of sets (warm-ups,
+  "easy" portions, anything logged as `duration` instead) carry no
+  `distanceM` at all, so the sum only ever reflected part of the session.
+  A single, explicit whole-session number is more accurate and much
+  simpler for the app to trust. The unit split (km for bike/run, m for
+  swim) isn't a inconsistency to "fix" — it matches how distance is
+  already written everywhere else in these plans and in the athlete's own
+  log (`Triathlon_training.pdf`), so converting it to one unit
+  everywhere would just add a translation step for no benefit. If a
+  session genuinely has no sensible total (most `gym`/`rest`/`other`,
+  and most `brick`s split across two disciplines), omit the field rather
+  than forcing a number — the app falls back to a duration-based volume
+  estimate for that session instead of failing.
+
+---
+
+## 6. Checklist before finalizing any plan file
+
+- [ ] Every week's prose has a matching `\`\`\`session` block placed right
+      after it.
+- [ ] Every session object has `date`, `discipline`, `title`, and — for
+      any regular week — `phase` and `weekLabel`.
+- [ ] Every `swim`/`bike`/`run` session has a `totalDistance` — km for
+      bike/run, meters for swim (§2). Double-check the unit, not just
+      the presence of the field: a bike ride entered in meters (or a
+      swim entered in km) will silently wreck that week's Stats chart.
+- [ ] `phase` values are copy-pasted from §3, not paraphrased.
+- [ ] Titles are stable/sensible for re-import (won't collide oddly with
+      earlier imports of the same day).
+- [ ] No stray triple-backticks anywhere in the prose.
+- [ ] JSON is valid — every `"` inside a string is escaped, no trailing
+      commas. Worth a quick `json.loads()` sanity pass before delivering.
+- [ ] Set-level fields use the right types (numbers for `weightKg`/
+      `distanceM`/`setsCount`/`reps`, strings for everything else).
+- [ ] Weekly volume matches the athlete's profile distance/phase per §7's
+      table — not a volume left over from a previous, different target.
+- [ ] Every prescribed pace/power is derived from the athlete's goal time
+      per §7, not copied forward unchanged from an older block written for
+      a different goal or distance.
+- [ ] If the goal-derived pace is more than ~8-10% faster than what the
+      historical log actually demonstrates, that mismatch is flagged in
+      the plan's Notes section (§7) rather than silently prescribed.
+- [ ] Session-days per week never exceed `trainingDaysPerWeek` (§7.5) —
+      count two-a-days as one day, not two.
+- [ ] Discipline scope matches `sport` exactly (§7.6): no swim/bike for a
+      running-only athlete (gym stays in); at least one brick per week for
+      a triathlete.
+- [ ] Doubles and the week's longest session land on the listed
+      higher-time dates (§7.5.1), not on an arbitrary day.
+
+---
+
+## 7. Athlete target governance — volume, pacing, and goal-driven prescription
+
+**This section is binding, not advisory.** Every plan generated in this
+project must be sized and paced from the athlete's profile target — the
+selected event distance (`RunningDistance` or `TriathlonDistance` in
+`Models/RaceDistance.swift`) and goal time(s) (`AthleteProfile.
+goalOverallTime`/`goalSwimTime`/`goalBikeTime`/`goalRunTime`) — not from
+generic defaults, and not just carried forward from whatever volume the
+historical log happens to already show. The check-in prompt built by
+`PlanPromptBuilder` includes a `Target race: ...` line stating exactly
+this; treat it the same way you'd treat a `phase` value from §3 — copy the
+distance and goal faithfully into the volume/pacing decisions below, don't
+paraphrase or ignore it because the log "looks like" a different level.
+
+### 7.1 Weekly volume by distance and phase
+
+These are **starting ranges**, meant to be nudged by the athlete's actual
+demonstrated capacity in the log (§7.3), not applied as rigid numbers
+regardless of history. Running volumes are total run km/week (all
+sessions combined); triathlon volumes are per-discipline weekly km (swim in
+km, not meters, for this table only — convert when writing `totalDistance`
+per §2's unit rule).
+
+**Running**
+
+| Distance | Build-Up | Endurance | Peak | Taper |
+|---|---|---|---|---|
+| 5K | 15-25 km | 25-35 km | 30-40 km | 15-20 km |
+| 10K | 20-30 km | 30-45 km | 40-55 km | 20-25 km |
+| Half Marathon | 25-35 km | 35-55 km | 50-65 km | 25-35 km |
+| Marathon | 30-45 km | 45-70 km | 65-85 km | 30-45 km (2-3 week taper) |
+
+**Triathlon** (weekly totals per discipline)
+
+| Distance | Phase | Swim | Bike | Run |
+|---|---|---|---|---|
+| Sprint | Build-Up→Peak | 4-8 km | 60-120 km | 15-30 km |
+| Olympic | Build-Up→Peak | 6-12 km | 100-180 km | 20-40 km |
+| Half Ironman | Build-Up→Peak | 8-15 km | 150-280 km | 25-45 km |
+| Ironman | Build-Up→Peak | 10-18 km | 200-350+ km | 30-55 km |
+
+Taper: cut all three disciplines to roughly 40-60% of Peak volume, same
+"one clear rest day, no new stress" logic as any taper. Within each cell,
+scale toward the lower bound for an athlete newer to the distance or
+returning from a break in the log, and toward the upper bound for an
+athlete whose recent log already shows consistent volume near or above the
+Build-Up number — this is the "nudge by demonstrated capacity" adjustment
+mentioned above.
+
+### 7.2 Deriving pace and power from the goal time
+
+**Running (`goalOverallTime` + `RunningDistance.distanceKm`):**
+1. Goal race pace = goal time ÷ distance.
+2. Easy/Z2 pace ≈ goal race pace + 45-75"/km slower.
+3. Threshold/tempo pace ≈ goal race pace + 10-20"/km slower (tighter gap
+   for 5K/10K goals, wider for marathon goals, since marathon race pace
+   itself sits closer to threshold).
+4. VO2/interval pace ≈ goal race pace − 10-20"/km faster, held only for
+   short reps (per §4's `duration`/`rest` fields), never for the bulk of a
+   session's volume.
+5. Write every derived pace explicitly into `sets[].paceOrPower` — never
+   leave it as "race pace" in prose without a number, per the existing
+   "fully explicit" rule already in the check-in prompt.
+
+**Triathlon (`goalOverallTime` and/or per-leg splits):**
+1. If a leg split (`goalSwimTime`/`goalBikeTime`/`goalRunTime`) is present,
+   use it directly for that leg's pace/power derivation (swim: pace per
+   100m; bike: target average speed → estimate power from the athlete's
+   own historical W/log if available, otherwise a Z2/tempo band relative
+   to their logged FTP-adjacent efforts; run: same as the running formula
+   above using the leg distance).
+2. If a leg split is missing, derive it proportionally from
+   `goalOverallTime` using rough age-group split proportions as a starting
+   point, then sanity-check against the log (§7.3):
+   - Sprint/Olympic: swim ≈ 10-12%, T1+T2 ≈ 3-5%, bike ≈ 50-55%, run ≈
+     28-32% of overall time.
+   - Half/Full Ironman: swim ≈ 8-10%, T1+T2 ≈ 2-3%, bike ≈ 53-58%, run ≈
+     30-35% of overall time (bike share grows, transition share shrinks,
+     relative to the shorter distances).
+3. State in the plan's Notes whenever a split was derived rather than
+   athlete-supplied, so the athlete knows it's an estimate to refine, not
+   a number they typed themselves.
+
+### 7.3 Sanity-checking the goal against the log
+
+Before finalizing paces, compare the goal-derived race pace/power against
+what the historical log actually demonstrates (recent tempo runs,
+threshold intervals, FTP-adjacent bike efforts, recent swim pace per
+100m). If the goal implies a sustained pace/power more than roughly 8-10%
+faster than the best comparable effort already logged, don't silently
+prescribe it as if it were already achievable — call this out explicitly
+in that week's `## Notes` section (e.g. "your 10K goal implies ~4'15"/km
+race pace; your best recent tempo effort was ~4'40"/km, so this block
+targets closing that gap rather than assuming it's already there") and
+pace the actual prescribed sessions off the log-demonstrated fitness for
+now, trending toward the goal pace as the block progresses. This keeps
+§7.2's formulas from generating an unsafe or demoralizing plan when the
+goal is aspirational rather than already-fit.
+
+### 7.4 Fallback when no target is set
+
+`DistanceAndGoalSection` defaults every profile to a sane distance
+(Marathon / Olympic) even before the athlete fills in a goal time, so
+there's always a distance to size volume from (§7.1). If `goalOverallTime`
+(and, for triathlon, all three leg splits) is blank — the "no goal time
+set" / "no overall goal set" text the prompt substitutes in for an empty
+field — pace sessions off the athlete's own demonstrated log paces
+(§7.3's method, without a goal to compare against) rather than inventing a
+number, and note in that block's `## Notes` that a goal time would let
+future blocks be paced more precisely.
+
+### 7.5 Weekly training frequency vs. distance — the capacity check
+
+`AthleteProfile.trainingDaysPerWeek` is the athlete's own stated ceiling on
+how many *days* a week they can realistically train — deliberately a day
+count, not a session count, because two sessions can share a day (run +
+gym, swim + gym, a brick) without needing an extra day free, and asking
+"how many sessions" makes athletes either undercount (forgetting gym
+counts) or overcount (double-booking a day they don't actually have
+twice). The check-in prompt's `availabilityLine` states this number, and —
+if it falls below the distance's recommended minimum — the exact same
+warning text the athlete already saw and dismissed on the profile screen
+(`TrainingCapacityWarning`, mirrored in the table below so the two stay in
+sync):
+
+| Distance | Recommended min. training days/week |
+|---|---|
+| 5K | 3 |
+| 10K | 3 |
+| Half Marathon | 4 |
+| Marathon | 5 |
+| Sprint triathlon | 4 |
+| Olympic triathlon | 5 |
+| Half Ironman | 6 |
+| Ironman | 7 |
+
+**This table must stay in sync with `RunningDistance.minTrainingDaysPerWeek`
+and `TriathlonDistance.minTrainingDaysPerWeek` in `Models/RaceDistance.swift`
+— if one changes, update the other in the same pass.**
+
+When `trainingDaysPerWeek` is at or above the table's minimum, plan
+normally. When it's below (the athlete was warned and chose to continue
+anyway — the prompt says so explicitly), **never invent extra training
+days to hit §7.1's volume**. Instead:
+- Cap the plan at exactly `trainingDaysPerWeek` distinct calendar days per
+  week — a two-a-day (e.g. swim + gym on the same date) still only uses
+  one of those days, even though it's two `session` JSON objects sharing
+  one `date`.
+- Make each day carry more — longer or more purposeful sessions, or a
+  second session stacked on the same day — rather than adding days:
+  combine easy volume into fewer, longer aerobic sessions; use bricks
+  (§7.6) to cover two disciplines in one day for a triathlete; prioritize
+  the session types that matter most for the goal (e.g. for a marathon on
+  2 training days/week, one long run + one quality/threshold day beats two
+  easy-run days — cut easy volume before cutting the session that actually
+  builds race fitness).
+- Say so plainly in that block's `## Notes`: name the gap between
+  recommended and actual frequency, and what got prioritized/cut as a
+  result, so the athlete understands the trade-off rather than assuming
+  the compressed plan is equivalent to the full-frequency version.
+
+#### 7.5.1 Higher-time days — where doubles and long sessions go
+
+`AthleteProfile.longSessionDays` marks which weekdays the athlete has more
+time available (evenings free for a second session, a whole free morning
+for a long run, etc.) — independent of `trainingDaysPerWeek`'s count. The
+check-in prompt's `longSessionDatesLine` converts this into the *actual
+calendar dates* falling in the 2-week block being generated, so placement
+should be exact, not "some day around midweek":
+
+- Whenever a plan needs a double session (two disciplines/session-types on
+  one day) or the single longest session of the week (the long run, the
+  long ride, the key brick), place it on one of the listed higher-time
+  dates first — that's what they're for.
+- Keep the *other* training days shorter and single-purpose: one session,
+  a duration that fits an ordinary weekday, nothing that assumes the
+  athlete has evening time they didn't mark.
+- If no higher-time dates are listed (`longSessionDatesLine` says "No
+  specific higher-time days marked"), fall back to spreading structure
+  evenly across the week — put the long session wherever the weekly rhythm
+  best supports recovery (e.g. not immediately before a key quality
+  session), same as this document's guidance before this field existed.
+- This is a placement preference, not a volume override — §7.1's totals
+  and §7.5's day-count cap still apply; higher-time days just decide
+  *which* days absorb the week's biggest chunks of that volume.
+
+### 7.6 Discipline scope — what belongs in the plan at all
+
+The prompt's `disciplineLine` states this explicitly per block; follow it
+exactly rather than defaulting to old habits from a previous athlete's
+plan:
+
+- **Running-only athletes (`sport == running`): no swim or bike sessions,
+  ever.** The plan is running + gym/strength & conditioning + rest days
+  only. Gym/S&C is NOT optional here — it stays in for cross-training and
+  injury prevention regardless of sport, same as every other block (the
+  "every week includes ... strength & conditioning" rule earlier in this
+  document was never sport-conditional, and running-only plans don't get
+  an exception). Do not add bike or swim sessions "for cross-training" —
+  that's what the gym block is for in a running-only plan; introducing an
+  extra discipline the athlete never asked for or logged before is a
+  scope violation, not a helpful addition.
+- **Triathletes (`sport == triathlon`): swim, bike, and run all belong,
+  plus at least one brick session per week.** A brick (already a valid
+  `discipline` value per §2) combines two disciplines back-to-back in one
+  session — almost always bike→run, occasionally swim→bike — and is
+  mandatory, not optional, for a triathlete's plan: race-day transitions
+  are a distinct skill/adaptation that pure single-discipline training
+  doesn't build. If `trainingDaysPerWeek` is tight (§7.5), a brick is one
+  of the most efficient ways to cover two disciplines in a single day, not
+  just a specialty session to fit in when there's room — and a
+  higher-time day (§7.5.1) is the natural home for it.
+

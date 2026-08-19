@@ -1,7 +1,8 @@
-import { useState, useRef } from 'react'
+import { useState } from 'react'
 import { Camera, Trash2 } from 'lucide-react'
 import Sheet from './Sheet'
 import ProfileAvatar from './ProfileAvatar'
+import ProfilePictureSheet from './ProfilePictureSheet'
 import DistanceAndGoalSection from './DistanceAndGoalSection'
 import { db } from '../db/db'
 import { currentBlockEnd } from '../services/planBlockTrigger'
@@ -29,12 +30,12 @@ function hasOngoingPlan(allSessions) {
 }
 
 export default function ProfileSheet({ profile, allSessions, onClose }) {
-  const fileRef = useRef(null)
   const [local, setLocal] = useState(profile)
   const [hasCompetition, setHasCompetition] = useState(!!profile.competitionDate)
   const [confirmingBlockReset, setConfirmingBlockReset] = useState(null) // { field, value, message } | null
   const [showingGoalNotice, setShowingGoalNotice] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [showingPictureSheet, setShowingPictureSheet] = useState(false)
 
   const patch = async (fields) => {
     setLocal((l) => ({ ...l, ...fields }))
@@ -125,13 +126,12 @@ export default function ProfileSheet({ profile, allSessions, onClose }) {
   return (
     <Sheet title="Profile" onClose={onClose} wide>
       <div className="p-4 flex flex-col gap-7 pb-10">
-        <label className="relative self-center cursor-pointer">
+        <button className="relative self-center" onClick={() => setShowingPictureSheet(true)}>
           <ProfileAvatar imageData={local.imageData} name={local.name} diameter={110} />
           <span className="absolute -bottom-1 -right-1 bg-background rounded-full p-0.5">
             <Camera size={28} className="text-accent" />
           </span>
-          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPickPhoto} />
-        </label>
+        </button>
 
         <div className="flex flex-col gap-2">
           <label className="text-xs text-minor-text">Name</label>
@@ -247,6 +247,10 @@ export default function ProfileSheet({ profile, allSessions, onClose }) {
           </div>
         )}
       </div>
+
+      {showingPictureSheet && (
+        <ProfilePictureSheet profile={local} onClose={() => setShowingPictureSheet(false)} onPickPhoto={onPickPhoto} />
+      )}
     </Sheet>
   )
 }

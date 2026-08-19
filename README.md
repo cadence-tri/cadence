@@ -1,5 +1,7 @@
 # Cadence
 
+![CadenceLogo](src/assets/cadence-wordmark.jpg)
+
 A training log and plan tracker for marathon and triathlon training.
 
 Live at: **https://cadence-tri.github.io/cadence/** (once deployed — see below)

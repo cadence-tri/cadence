@@ -1,6 +1,6 @@
 import CompletionRing from './CompletionRing'
 import { disciplineIcon, disciplineColor } from '../db/discipline'
-import { completionFraction, isFullyCompleted, withAllSetsCompleted } from '../db/session'
+import { completionFraction, isFullyCompleted, withAllSetsCompleted, addressedSetCount } from '../db/session'
 
 export function OptionalBadge() {
   return (
@@ -30,7 +30,7 @@ export default function SessionRow({ session, onTap, onToggle }) {
         </div>
         {session.sets?.length > 0 && (
           <div className="text-xs text-minor-text">
-            {session.sets.filter((s) => s.isCompleted).length}/{session.sets.length} items
+            {addressedSetCount(session)}/{session.sets.length} items
           </div>
         )}
       </div>

@@ -1,12 +1,20 @@
 import { useState } from 'react'
-import { CheckCircle2, Circle } from 'lucide-react'
+import { CheckCircle2, XCircle } from 'lucide-react'
 import { format } from 'date-fns'
 import Sheet from './Sheet'
 import CompletionRing from './CompletionRing'
 import { OptionalBadge } from './SessionRow'
 import { disciplineIcon, disciplineColor, disciplineDisplayName } from '../db/discipline'
-import { completionFraction, setSummary } from '../db/session'
+import { completionFraction, addressedSetCount, setSummary } from '../db/session'
 import { db } from '../db/db'
+
+function SkippedBadge() {
+  return (
+    <span className="text-[10px] font-semibold text-minor-text bg-minor-text/15 px-1.5 py-0.5 rounded-full shrink-0">
+      Skipped
+    </span>
+  )
+}
 
 function EditableSetRow({ set, discipline, onChange }) {
   const showsWeight = discipline === 'gym' || set.weightKg != null
@@ -36,6 +44,46 @@ function EditableSetRow({ set, discipline, onChange }) {
   )
 }
 
+/** A prescribed item's row, outside edit mode — two independent tap
+ * targets (done / skipped) rather than a single toggle, so "I did this"
+ * and "I'm deliberately not doing this" are both one tap away instead of
+ * skip only being reachable by leaving the item blank forever. Once every
+ * item in a session is marked one way or the other, the session counts
+ * as fully addressed (see `db/session.js`'s `completionFraction`) and
+ * shows up in Stats — skipped items themselves just don't contribute any
+ * distance/duration/weight to those stats. */
+function SetRow({ set, color, onSetStatus }) {
+  const setStatus = (status) => () => onSetStatus(status)
+  const addressed = set.isCompleted || set.isSkipped
+
+  return (
+    <div className="flex items-center gap-2 py-2">
+      <button onClick={setStatus('done')} aria-label="Mark done" className="shrink-0">
+        <CheckCircle2
+          size={20}
+          style={{ color: set.isCompleted ? color : 'var(--color-minor-text)' }}
+          strokeWidth={set.isCompleted ? 2.5 : 1.5}
+          className={set.isCompleted ? '' : 'opacity-35'}
+        />
+      </button>
+      <button onClick={setStatus('skipped')} aria-label="Mark skipped" className="shrink-0">
+        <XCircle
+          size={20}
+          className="text-minor-text"
+          strokeWidth={set.isSkipped ? 2.5 : 1.5}
+          style={{ opacity: set.isSkipped ? 1 : 0.35 }}
+        />
+      </button>
+      <div className="flex-1 flex items-center gap-1.5 flex-wrap">
+        <span className={`text-sm ${addressed ? 'line-through text-minor-text' : 'text-main-text'}`}>
+          {setSummary(set)}
+        </span>
+        {set.isSkipped && <SkippedBadge />}
+      </div>
+    </div>
+  )
+}
+
 /** Session detail — completion toggling, editable prescribed sets, notes,
  * and athlete feedback. Ported from SessionDetailView.swift. */
 export default function SessionDetailSheet({ session, onClose }) {
@@ -51,8 +99,20 @@ export default function SessionDetailSheet({ session, onClose }) {
     await db.sessions.update(local.id, patch)
   }
 
-  const toggleSet = (index) => {
-    const sets = local.sets.map((s, i) => (i === index ? { ...s, isCompleted: !s.isCompleted } : s))
+  const setStepStatus = (index, status) => {
+    const current = local.sets[index]
+    // Tapping the already-active state clears it back to "not addressed"
+    // (a toggle, not a one-way ratchet); tapping the other state always
+    // switches cleanly to it.
+    const next =
+      status === 'done'
+        ? current.isCompleted
+          ? { isCompleted: false, isSkipped: false }
+          : { isCompleted: true, isSkipped: false }
+        : current.isSkipped
+          ? { isCompleted: false, isSkipped: false }
+          : { isCompleted: false, isSkipped: true }
+    const sets = local.sets.map((s, i) => (i === index ? { ...s, ...next } : s))
     persist({ sets })
   }
 
@@ -79,7 +139,7 @@ export default function SessionDetailSheet({ session, onClose }) {
             )}
             {local.sets?.length > 0 && (
               <div className="text-xs text-minor-text">
-                {local.sets.filter((s) => s.isCompleted).length}/{local.sets.length} items completed
+                {addressedSetCount(local)}/{local.sets.length} items addressed
               </div>
             )}
           </div>
@@ -106,25 +166,12 @@ export default function SessionDetailSheet({ session, onClose }) {
                 {isEditing ? 'Done' : 'Edit'}
               </button>
             </div>
-            <div className="bg-panel rounded-xl p-3 flex flex-col divide-y divide-minor-text/15">
+            <div className="bg-panel rounded-xl px-3 flex flex-col divide-y divide-minor-text/15">
               {local.sets.map((set, i) =>
                 isEditing ? (
                   <EditableSetRow key={i} set={set} discipline={local.discipline} onChange={(s) => editSet(i, s)} />
                 ) : (
-                  <button
-                    key={i}
-                    onClick={() => toggleSet(i)}
-                    className="flex items-start gap-2.5 py-2 text-left"
-                  >
-                    {set.isCompleted ? (
-                      <CheckCircle2 size={18} style={{ color }} className="shrink-0 mt-0.5" />
-                    ) : (
-                      <Circle size={18} className="text-minor-text shrink-0 mt-0.5" />
-                    )}
-                    <span className={`text-sm ${set.isCompleted ? 'line-through text-minor-text' : 'text-main-text'}`}>
-                      {setSummary(set)}
-                    </span>
-                  </button>
+                  <SetRow key={i} set={set} color={color} onSetStatus={(status) => setStepStatus(i, status)} />
                 )
               )}
             </div>

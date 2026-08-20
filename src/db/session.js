@@ -42,7 +42,12 @@ export function setSummary(set) {
   return parts.join(' ')
 }
 
-/** A fresh blank set, matching SessionSet's default init. */
+/** A fresh blank set, matching SessionSet's default init. `isSkipped` is a
+ * PWA-only addition (not in the native app's model) — lets an individual
+ * prescribed item be explicitly marked "skipped" rather than just left
+ * unchecked, so a session with one skipped item can still be recognized
+ * as fully addressed and counted in Stats, instead of silently excluding
+ * the whole session because one item was never resolved either way. */
 export function newSet(overrides = {}) {
   return {
     exercise: null,
@@ -55,6 +60,7 @@ export function newSet(overrides = {}) {
     rest: null,
     notes: null,
     isCompleted: false,
+    isSkipped: false,
     ...overrides,
   }
 }
@@ -69,12 +75,28 @@ export function makeImportKey(date, discipline, title) {
   return `${toISODateString(asDate(date))}|${discipline}|${title}`
 }
 
-/** Fraction of a session that's done — sets-driven if it has structured
- * sets, otherwise falls back to the whole-session `isCompleted` toggle. */
+/** Fraction of a session that's been *addressed* — every set either
+ * ticked done or crossed off skipped counts here, so a session with one
+ * deliberately-skipped item can still reach 100% and be counted in
+ * Stats — see `newSet`'s doc comment on `isSkipped`. Falls back to the
+ * whole-session `isCompleted` toggle for sessions with no structured
+ * sets. */
 export function completionFraction(session) {
   if (!session.sets || session.sets.length === 0) return session.isCompleted ? 1 : 0
-  const done = session.sets.filter((s) => s.isCompleted).length
-  return done / session.sets.length
+  const addressed = session.sets.filter((s) => s.isCompleted || s.isSkipped).length
+  return addressed / session.sets.length
+}
+
+/** How many sets are ticked done (excludes skipped ones) — used for
+ * distance/duration sums so a skipped item never contributes volume. */
+export function completedSetCount(session) {
+  return (session.sets ?? []).filter((s) => s.isCompleted).length
+}
+
+/** How many sets have been addressed one way or the other (done OR
+ * skipped) — used for "X/Y addressed" labels alongside `completionFraction`. */
+export function addressedSetCount(session) {
+  return (session.sets ?? []).filter((s) => s.isCompleted || s.isSkipped).length
 }
 
 export function isFullyCompleted(session) {
@@ -94,14 +116,16 @@ export function totalDistanceKm(session) {
   return session.discipline === 'swim' ? session.totalDistance / 1000 : session.totalDistance
 }
 
-/** Bulk-marks every set done/undone — the "tap the ring" shortcut. */
+/** Bulk-marks every set done/undone — the "tap the ring" shortcut. Always
+ * clears any per-set skip marks, since a bulk action is a clean
+ * all-done-or-all-undone reset, not a partial/skip state. */
 export function withAllSetsCompleted(session, completed) {
   if (!session.sets || session.sets.length === 0) {
     return { ...session, isCompleted: completed }
   }
   return {
     ...session,
-    sets: session.sets.map((s) => ({ ...s, isCompleted: completed })),
+    sets: session.sets.map((s) => ({ ...s, isCompleted: completed, isSkipped: false })),
     isCompleted: completed,
   }
 }

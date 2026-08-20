@@ -6,6 +6,7 @@ import ProfilePictureSheet from './ProfilePictureSheet'
 import DistanceAndGoalSection from './DistanceAndGoalSection'
 import { db } from '../db/db'
 import { currentBlockEnd } from '../services/planBlockTrigger'
+import { weekStreak as computeWeekStreak } from '../db/session'
 import { asDate } from '../services/dateUtils'
 
 function readFileAsDataURL(file) {
@@ -249,7 +250,12 @@ export default function ProfileSheet({ profile, allSessions, onClose }) {
       </div>
 
       {showingPictureSheet && (
-        <ProfilePictureSheet profile={local} onClose={() => setShowingPictureSheet(false)} onPickPhoto={onPickPhoto} />
+        <ProfilePictureSheet
+          profile={local}
+          weekStreak={computeWeekStreak(allSessions)}
+          onClose={() => setShowingPictureSheet(false)}
+          onPickPhoto={onPickPhoto}
+        />
       )}
     </Sheet>
   )

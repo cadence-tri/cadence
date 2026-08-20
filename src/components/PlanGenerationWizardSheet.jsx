@@ -8,7 +8,7 @@ import { importMarkdown } from '../services/markdownImporter'
 
 /** The "how'd it go, generate the next 2 weeks" wizard. Ported from
  * PlanGenerationWizardView.swift, minus the Smart Coach one-tap path (cut
- * from the PWA per HANDOFF_PWA.md — copy/paste into a Claude chat is now
+ * from the PWA per HANDOFF_PWA.md — copy/paste into an AI chat is now
  * the only generation path). */
 export default function PlanGenerationWizardSheet({ profile, allSessions, weekPhases, onClose }) {
   const isPlanEmpty = allSessions.length === 0
@@ -88,11 +88,8 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
 
         {stage === 'prompt' && (
           <>
-            <h3 className="font-display font-bold text-xl text-main-text">Copy this into a Claude chat</h3>
-            <p className="text-sm text-minor-text">
-              Open Claude (app, or claude.ai — the free tier is plenty for this), paste this whole message, and
-              send it.
-            </p>
+            <h3 className="font-display font-bold text-xl text-main-text">Copy this into your AI coach</h3>
+            <p className="text-sm text-minor-text">Open your favorite AI, paste this whole message, and send it.</p>
             <div className="max-h-64 overflow-y-auto p-2.5 rounded-xl bg-panel">
               <pre className="text-[11px] font-mono text-main-text whitespace-pre-wrap break-words">{prompt}</pre>
             </div>
@@ -107,17 +104,17 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
               disabled={!copied}
               className="w-full py-2.5 rounded-xl border border-accent text-accent font-semibold disabled:opacity-40"
             >
-              Continue → paste Claude&apos;s reply
+              Continue → paste Coach&apos;s reply
             </button>
           </>
         )}
 
         {stage === 'pasteBack' && (
           <>
-            <h3 className="font-display font-bold text-xl text-main-text">Paste Claude&apos;s reply</h3>
+            <h3 className="font-display font-bold text-xl text-main-text">Paste Coach&apos;s reply</h3>
             <p className="text-sm text-minor-text">
-              Copy Claude&apos;s entire reply from the chat and paste it below. Nothing is saved to your log until
-              you tap Import.
+              Copy your AI Coach&apos;s entire reply from the chat and paste it below. Tap Import to save your plan
+              and start training.
             </p>
             <textarea
               value={pastedReply}

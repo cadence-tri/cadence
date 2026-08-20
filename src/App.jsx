@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { Calendar, ChartLine, UploadCloud } from 'lucide-react'
+import { Calendar, ChartLine, GraduationCap } from 'lucide-react'
 import { db, PROFILE_ID } from './db/db'
 import SplashScreen from './screens/SplashScreen'
 import LoginScreen from './screens/LoginScreen'
@@ -15,7 +15,7 @@ import PlanGenerationWizardSheet from './components/PlanGenerationWizardSheet'
 const TABS = [
   { id: 'daily', label: 'Daily', icon: Calendar },
   { id: 'stats', label: 'Stats', icon: ChartLine },
-  { id: 'import', label: 'Import', icon: UploadCloud },
+  { id: 'import', label: 'Coach', icon: GraduationCap },
 ]
 
 function MainTabView({ profile }) {

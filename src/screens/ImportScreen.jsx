@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { UploadCloud, PenSquare, Wand2, DownloadCloud, RotateCcw, Trash2 } from 'lucide-react'
+import { UploadCloud, GraduationCap, PenSquare, Wand2, DownloadCloud, RotateCcw, Trash2 } from 'lucide-react'
 import { db } from '../db/db'
 import { importMarkdown } from '../services/markdownImporter'
 import { encodeBackup, restoreBackup, deleteUpcoming } from '../services/backupService'
@@ -57,21 +57,23 @@ function PlanImportSection({ onOpenManualEntry, onOpenWizard, allSessions }) {
   }
 
   const lastImport = allSessions.length ? allSessions.reduce((max, s) => (s.importedAt > max ? s.importedAt : max), allSessions[0].importedAt) : null
+  const isPlanEmpty = allSessions.length === 0
 
   return (
     <div className="flex flex-col items-center gap-5 px-4 text-center">
-      <UploadCloud size={44} className="text-accent" />
-      <h2 className="font-display font-bold text-xl text-main-text">Import a training plan</h2>
+      <GraduationCap size={44} className="text-accent" />
+      <h2 className="font-display font-bold text-xl text-main-text">Cadence Coach</h2>
       <p className="text-sm text-minor-text">
-        Import the .md file for your plan. Re-importing an updated file for the same weeks will skip sessions you
-        already have, so it&apos;s safe to import again after in-week adjustments.
+        {isPlanEmpty
+          ? "Welcome to Cadence! Let's start building your plan."
+          : 'Generate the next two weeks of your training plan or import an existing backup.'}
       </p>
 
       <button
         onClick={onOpenWizard}
         className="w-full py-2.5 rounded-xl bg-accent text-white font-semibold flex items-center justify-center gap-2"
       >
-        <Wand2 size={16} /> Generate next 2 weeks
+        <Wand2 size={16} /> {isPlanEmpty ? 'Start a training plan' : 'Generate next 2 weeks'}
       </button>
 
       <button

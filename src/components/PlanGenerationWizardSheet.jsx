@@ -11,6 +11,7 @@ import { importMarkdown } from '../services/markdownImporter'
  * from the PWA per HANDOFF_PWA.md — copy/paste into a Claude chat is now
  * the only generation path). */
 export default function PlanGenerationWizardSheet({ profile, allSessions, weekPhases, onClose }) {
+  const isPlanEmpty = allSessions.length === 0
   const [stage, setStage] = useState('note') // note | prompt | pasteBack | result
   const [note, setNote] = useState('')
   const [prompt, setPrompt] = useState('')
@@ -60,15 +61,18 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
   }
 
   return (
-    <Sheet title="Next 2 Weeks" onClose={onClose}>
+    <Sheet title={isPlanEmpty ? 'It starts here!' : 'Next 2 Weeks'} onClose={onClose}>
       <div className="p-4 flex flex-col gap-4">
         {stage === 'note' && (
           <>
             <Wand2 size={36} className="text-accent" />
-            <h3 className="font-display font-bold text-xl text-main-text">How did the last block go?</h3>
+            <h3 className="font-display font-bold text-xl text-main-text">
+              {isPlanEmpty ? "Let's start training!" : 'How did the last block go?'}
+            </h3>
             <p className="text-sm text-minor-text">
-              Anything worth flagging before the next 2 weeks are generated — fatigue, a niggle, a session that
-              felt great, a schedule conflict coming up. Leave it blank to just continue the plan as progressed.
+              {isPlanEmpty
+                ? 'Tell me more about you. What are you training for? What are your past results (race, training, best efforts)? Any major injury I should be aware of or anything else you consider worth raising before we start?'
+                : "Anything worth flagging before the next 2 weeks are generated — fatigue, a niggle, a session that felt great, a schedule conflict coming up. Leave it blank to just continue the plan as progressed."}
             </p>
             <textarea
               value={note}

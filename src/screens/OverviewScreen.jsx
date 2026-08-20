@@ -7,6 +7,19 @@ import { needsRecoveryWeekWarning } from '../db/weekPhase'
 import { needsNextBlockPrompt } from '../services/planBlockTrigger'
 import { db } from '../db/db'
 
+function NoPlanBanner({ onClick }) {
+  return (
+    <button onClick={onClick} className="w-full p-4 rounded-2xl bg-accent/12 flex items-start gap-2.5 text-left">
+      <Wand2 size={18} className="text-accent shrink-0 mt-0.5" />
+      <div className="flex-1">
+        <div className="text-sm font-bold text-main-text">No training plan yet</div>
+        <div className="text-xs text-minor-text">Tap to set up your first 2-week block and get started.</div>
+      </div>
+      <ChevronRight size={14} className="text-minor-text shrink-0 mt-1" />
+    </button>
+  )
+}
+
 function NextBlockPromptBanner({ onClick }) {
   return (
     <button onClick={onClick} className="w-full p-4 rounded-2xl bg-accent/12 flex items-start gap-2.5 text-left">
@@ -46,7 +59,11 @@ export default function OverviewScreen({ profile, allSessions, weekPhases, onOpe
 
   return (
     <div className="flex flex-col gap-4 p-4 pb-8">
-      {needsNextBlockPrompt(allSessions) && <NextBlockPromptBanner onClick={onOpenWizard} />}
+      {allSessions.length === 0 ? (
+        <NoPlanBanner onClick={onOpenWizard} />
+      ) : (
+        needsNextBlockPrompt(allSessions) && <NextBlockPromptBanner onClick={onOpenWizard} />
+      )}
       {needsRecoveryWeekWarning(weekPhases, allSessions) && <RecoveryWeekWarningBanner />}
       <WeekGlanceCard weekStart={currentWeekStart} sessions={allSessions} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
       <SelectedDayCard

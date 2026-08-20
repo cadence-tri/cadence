@@ -116,6 +116,10 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
               Copy your AI Coach&apos;s entire reply from the chat and paste it below. Tap Import to save your plan
               and start training.
             </p>
+            <p className="text-xs text-minor-text">
+              Don&apos;t worry if the code-block formatting gets stripped out along the way — as long as the reply
+              text is in here somewhere, it&apos;ll still be found.
+            </p>
             <textarea
               value={pastedReply}
               onChange={(e) => setPastedReply(e.target.value)}

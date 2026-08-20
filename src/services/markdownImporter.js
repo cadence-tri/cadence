@@ -4,13 +4,97 @@ import { parsePhase } from '../db/phase'
 import { newSet, makeImportKey } from '../db/session'
 import { parseImportDate, startOfWeekMon, toISODateString } from './dateUtils'
 
-/** Extracts every ```session ... ``` fenced block from markdown text. */
+/** Extracts every ```session ... ``` fenced block from markdown text. Falls
+ * back to scanning for bare (unfenced) JSON when no fences are found — see
+ * `extractBareJsonSessionBlocks`'s doc comment for why that fallback
+ * exists. */
 export function extractSessionBlocks(markdown) {
   const regex = /```session\s*([\s\S]*?)```/g
   const blocks = []
   let match
   while ((match = regex.exec(markdown)) !== null) {
     blocks.push(match[1])
+  }
+  if (blocks.length > 0) return blocks
+  return extractBareJsonSessionBlocks(markdown)
+}
+
+/** Finds the index of the bracket that closes the one at `start` (`[`/`{`
+ * at `text[start]`), respecting string literals so brackets inside a
+ * quoted value don't throw off the depth count. Returns -1 if unbalanced. */
+function findMatchingBracket(text, start) {
+  const open = text[start]
+  const close = open === '[' ? ']' : '}'
+  let depth = 0
+  let inString = false
+  let escape = false
+  for (let i = start; i < text.length; i++) {
+    const c = text[i]
+    if (inString) {
+      if (escape) escape = false
+      else if (c === '\\') escape = true
+      else if (c === '"') inString = false
+      continue
+    }
+    if (c === '"') inString = true
+    else if (c === open) depth++
+    else if (c === close) {
+      depth--
+      if (depth === 0) return i
+    }
+  }
+  return -1
+}
+
+/** Whether parsed JSON is plausibly session data — an array of (or a
+ * single) object(s) each carrying the three required string fields a real
+ * session always has. Used to tell an actual session block apart from
+ * unrelated bracketed text that happens to be valid JSON. */
+function looksLikeSessionData(parsed) {
+  const items = Array.isArray(parsed) ? parsed : [parsed]
+  if (items.length === 0) return false
+  return items.every(
+    (item) =>
+      item &&
+      typeof item === 'object' &&
+      typeof item.date === 'string' &&
+      typeof item.discipline === 'string' &&
+      typeof item.title === 'string'
+  )
+}
+
+/** Some chat clients strip code-fence markup when their reply is copied
+ * out (observed specifically copying from a logged-out ChatGPT session in
+ * Safari, though the exact cause is client-side rendering/copy behavior
+ * we don't control) — the fences render as UI chrome around a syntax-
+ * highlighted block rather than literal selectable text, so a manual
+ * copy grabs the JSON but not the ```session markers around it. Rather
+ * than depend on those markers surviving every chat UI's copy behavior,
+ * this scans the raw text for balanced [...]/{...} groups and keeps any
+ * that parse as valid JSON shaped like session data, wherever they land
+ * in the pasted text. */
+function extractBareJsonSessionBlocks(text) {
+  const blocks = []
+  let i = 0
+  while (i < text.length) {
+    const ch = text[i]
+    if (ch === '[' || ch === '{') {
+      const end = findMatchingBracket(text, i)
+      if (end === -1) {
+        i++
+        continue
+      }
+      const candidate = text.slice(i, end + 1)
+      try {
+        const parsed = JSON.parse(candidate)
+        if (looksLikeSessionData(parsed)) blocks.push(candidate)
+      } catch {
+        // Not valid JSON — just some other bracketed text, ignore it.
+      }
+      i = end + 1
+      continue
+    }
+    i++
   }
   return blocks
 }
@@ -71,7 +155,7 @@ export function parseMarkdown(markdown, existingSessions, existingWeekPhases) {
   const summary = { imported: 0, skippedDuplicates: 0, failedItems: [], warnings: [] }
   if (blocks.length === 0) {
     summary.failedItems.push(
-      'No ```session blocks found in this text. Make sure the plan was generated with the structured schema.'
+      "No training sessions found in this text. Make sure you pasted your coach's entire reply, including the JSON — it's fine if the ```session code-block formatting got stripped along the way (e.g. by some chat apps' copy behavior), the important part is that the JSON with each session's date/discipline/title is included somewhere in the pasted text."
     )
     return { newSessions: [], newWeekPhases: [], summary }
   }

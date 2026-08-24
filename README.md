@@ -50,13 +50,16 @@ npm run build     # production build to dist/
 npm run preview   # serve the production build locally, at /cadence/
 ```
 
-## Installing on iOS
+## Installing on your phone
 
-Visit the deployed URL in Safari, tap the Share icon, then **Add to Home
-Screen**. It installs like a native app icon and runs full-screen — no
-App Store, no sideloading, no certificate to renew.
+Visit the deployed URL in Safari (iOS) or Chrome (Android) and follow the instructions below.
+It installs like a native app icon and runs full-screen — no App Store, no sideloading, no certificate to renew.
 
 **Note**: if the "Add to Home Screen" does not appear, you can add it via "Edit actions" at the bottom of the page.
 
-![Tapping the Share icon in Safari](figures/cadenceapp-1.jpeg)
-![Add to Home Screen confirmation](figures/cadenceapp-2.jpeg)
+<table>
+  <tr>
+    <td><img src="figures/install-ios.png" alt="Install on iOS"></td>
+    <td><img src="figures/install-android.png" alt="Add to Home Screen confirmation"></td>
+  </tr>
+</table>

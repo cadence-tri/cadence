@@ -127,6 +127,25 @@ test('v3 backup profile normalization fixes the singleton id and sanitizes sched
   assert.equal(normalized.strengthPreferenceConfigured, true)
 })
 
+test('legacy backup phase normalization uses the current profile instead of imported phase labels', async () => {
+  const { deterministicWeekPhasesForImportedSessions } = await import('../src/services/backupService.js')
+  const currentProfile = profile({
+    sport: 'running',
+    runningDistance: 'marathon',
+    competitionDate: '2027-04-25',
+    trainingBlockStartDate: '2026-08-28',
+  })
+  const importedSessions = [
+    { date: '2026-08-24T00:00:00.000Z', discipline: 'run' },
+    { date: '2026-08-28T00:00:00.000Z', discipline: 'run' },
+    { date: '2026-08-30T00:00:00.000Z', discipline: 'run' },
+  ]
+
+  const phases = deterministicWeekPhasesForImportedSessions(currentProfile, importedSessions)
+  assert.equal(phases.length, 1)
+  assert.equal(phases[0].phase, 'buildUp')
+})
+
 test('marathon five-day Advanced first plan allocates every running week exactly to its target', () => {
   const p = profile({
     sport: 'running',

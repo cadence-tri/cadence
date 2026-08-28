@@ -158,38 +158,9 @@ function buildTrackLayout(profile, planStart, raceDate) {
   }
 }
 
-function layoutTrackLabels(segments) {
-  const labels = segments.map((segment) => ({
-    key: segment.key,
-    label: segment.label,
-    leftPct: segment.labelPct,
-    align: 'center',
-  }))
-
-  labels.push({ key: 'race', label: 'Race', leftPct: 100, align: 'right' })
-
-  // Short late-plan phases can be only a few percent wide, which makes
-  // centred labels collide on phones. Keep the horizontal position truthful
-  // to each phase, but stagger only the text vertically when necessary.
-  const lastPctByRow = [-Infinity, -Infinity, -Infinity]
-  return labels
-    .sort((a, b) => a.leftPct - b.leftPct)
-    .map((label) => {
-      const minGapPct = 10.5
-      let row = lastPctByRow.findIndex((lastPct) => label.leftPct - lastPct >= minGapPct)
-      if (row === -1) row = lastPctByRow.indexOf(Math.min(...lastPctByRow))
-      lastPctByRow[row] = label.leftPct
-      return { ...label, row }
-    })
-}
-
-function PhaseTrack({ phase, progress, planStart, raceDate, profile }) {
+function PhaseTrack({ progress, planStart, raceDate, profile }) {
   const markerPct = clamp01(progress) * 100
   const layout = buildTrackLayout(profile, planStart, raceDate)
-  const activeSegment = layout.segments.find((segment) => markerPct <= segment.endPct + 0.01)
-  const lastSegment = layout.segments.length ? layout.segments[layout.segments.length - 1] : null
-  const activePhaseKey = activeSegment?.key ?? lastSegment?.key ?? phase
-  const labels = layoutTrackLabels(layout.segments)
 
   return (
     <div className="mt-4">
@@ -212,18 +183,9 @@ function PhaseTrack({ phase, progress, planStart, raceDate, profile }) {
         />
       </div>
 
-      <div className="relative mt-2 h-[54px]">
-        {labels.map((label) => (
-          <span
-            key={label.key}
-            className={`absolute whitespace-nowrap text-[10px] font-semibold ${label.key === activePhaseKey ? 'text-main-text' : 'text-minor-text'}`}
-            style={label.align === 'right'
-              ? { right: 0, top: `${label.row * 16}px` }
-              : { left: `${label.leftPct}%`, top: `${label.row * 16}px`, transform: 'translateX(-50%)' }}
-          >
-            {label.label}
-          </span>
-        ))}
+      <div className="mt-1 flex items-center justify-between text-[10px] font-semibold text-minor-text">
+        <span>Plan start</span>
+        <span>Race</span>
       </div>
     </div>
   )
@@ -425,7 +387,6 @@ function RoadToRaceCardContent({ profile, sessions, weekPhases, onOpenProfile })
               <div className="text-base font-bold text-main-text">Current phase: {phaseLabel}</div>
               <p className="mt-1 text-xs leading-relaxed text-minor-text">{PHASE_DESCRIPTIONS[data.phase]}</p>
               <PhaseTrack
-                phase={data.phase}
                 progress={data.progress}
                 planStart={data.planStart}
                 raceDate={data.competitionDate}

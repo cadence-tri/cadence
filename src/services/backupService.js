@@ -1,6 +1,7 @@
 import { db, PROFILE_ID } from '../db/db.js'
 import { asDate, startOfWeekMon, startOfDay } from './dateUtils.js'
 import { newProfileDefaults } from '../db/profile.js'
+import { deterministicPhaseForWeek } from './planning/planScheduler.js'
 
 // The file written by "Export backup" / read by "Import backup" — and,
 // v1/v2 session/week-phase data is compatible with the native iOS backup
@@ -67,6 +68,37 @@ function normalizePhaseLoose(raw) {
   return known.includes(raw) ? raw : 'maintenance'
 }
 
+/**
+ * Rebuilds one scheduler-owned phase row for every calendar week represented
+ * by imported sessions. This is deliberately profile-driven: legacy backups
+ * may contain model-authored phase labels that predate the deterministic
+ * scheduler and therefore must not become a second source of truth.
+ */
+export function deterministicWeekPhasesForImportedSessions(profile, sessions) {
+  if (!profile || !Array.isArray(sessions) || sessions.length === 0) return []
+
+  const earliestSession = sessions.reduce((earliest, session) => {
+    const date = asDate(session.date)
+    if (!date) return earliest
+    return !earliest || date < earliest ? date : earliest
+  }, null)
+  if (!earliestSession) return []
+
+  const origin = profile.trainingBlockStartDate ?? earliestSession
+  const phasesByWeek = new Map()
+  for (const session of sessions) {
+    const sessionDate = asDate(session.date)
+    if (!sessionDate) continue
+    const weekStart = startOfWeekMon(sessionDate)
+    const weekKey = weekStart.toISOString()
+    phasesByWeek.set(weekKey, {
+      weekStart: weekKey,
+      phase: deterministicPhaseForWeek(profile, weekStart, origin),
+    })
+  }
+  return [...phasesByWeek.values()]
+}
+
 /** Restores a backup, REPLACING the entire current log. Destructive by
  * design — the caller must have already confirmed with the athlete.
  * Accepts both a PWA-exported backup and a native-app-exported backup
@@ -108,10 +140,26 @@ export async function restoreBackup(fileText) {
 
   const profileToRestore = normalizeProfileLoose(file.profile)
 
-  const weekPhasesToInsert = (Array.isArray(file.weekPhases) ? file.weekPhases : []).map((dto) => ({
+  // v1/v2 backups do not contain a profile. In that case the restore keeps
+  // Cadence's current singleton profile, so phase normalization must use that
+  // same profile too. Reading it before the destructive transaction ensures
+  // legacy backup handling cannot affect the normal v3 restore path.
+  const existingProfile = profileToRestore ? null : normalizeProfileLoose(await db.profile.get(PROFILE_ID))
+  const phaseProfile = profileToRestore ?? existingProfile
+
+  let weekPhasesToInsert = (Array.isArray(file.weekPhases) ? file.weekPhases : []).map((dto) => ({
     weekStart: (asDate(dto.weekStart) ?? new Date()).toISOString(),
     phase: normalizePhaseLoose(dto.phase),
   }))
+
+  if (phaseProfile && sessionsToInsert.length) {
+    // Backups created before the deterministic scheduler may contain phase
+    // labels authored by an external model. v3 uses the restored profile;
+    // v1/v2 uses the current profile that remains in Cadence after restore.
+    // This keeps Road to Race and the imported log on the same scheduler-owned
+    // macrocycle without changing behavior for current-format backups.
+    weekPhasesToInsert = deterministicWeekPhasesForImportedSessions(phaseProfile, sessionsToInsert)
+  }
   const raceProjectionsToInsert = (Array.isArray(file.raceProjections) ? file.raceProjections : [])
     .filter((p) => p?.raceKey && p?.date && Number.isFinite(p?.projectedSeconds))
     .map(({ id, ...projection }) => projection)

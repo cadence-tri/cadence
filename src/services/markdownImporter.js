@@ -1,9 +1,10 @@
-import { db } from '../db/db.js'
+import { db, PROFILE_ID } from '../db/db.js'
 import { normalizeDiscipline } from '../db/discipline.js'
 import { parsePhase } from '../db/phase.js'
 import { newSet, makeImportKey } from '../db/session.js'
 import { parseImportDate, startOfWeekMon, toISODateString } from './dateUtils.js'
 import { validateGeneratedPlan, mergeGeneratedWithSkeleton } from './planning/planValidator.js'
+import { deterministicPhaseForWeek } from './planning/planScheduler.js'
 
 /** Extracts every ```session ... ``` fenced block from markdown text. Falls
  * back to scanning for bare (unfenced) JSON when no fences are found — see
@@ -271,9 +272,10 @@ export function parseMarkdown(markdown, existingSessions, existingWeekPhases) {
 /** Imports markdown text into the live database — reads the current log,
  * parses, then writes the result in one transaction. */
 export async function importMarkdown(markdown, options = {}) {
-  const [existingSessions, existingWeekPhases] = await Promise.all([
+  const [existingSessions, existingWeekPhases, profile] = await Promise.all([
     db.sessions.toArray(),
     db.weekPhases.toArray(),
+    db.profile.get(PROFILE_ID),
   ])
   let { newSessions, decodedSessions, newWeekPhases, summary } = parseMarkdown(markdown, existingSessions, existingWeekPhases)
 
@@ -295,13 +297,43 @@ export async function importMarkdown(markdown, options = {}) {
     for (const week of options.skeleton.weeks ?? []) {
       phases.set(week.weekStart, { weekStart: new Date(`${week.weekStart}T00:00:00`).toISOString(), phase: week.phase })
     }
-    newWeekPhases = [...phases.values()].filter((wp) => !existingWeekPhases.some((existing) => toISODateString(startOfWeekMon(new Date(existing.weekStart))) === wp.weekStart.slice(0, 10)))
+    newWeekPhases = [...phases.values()]
     summary.validation = validation
+  } else if (profile && newSessions.length) {
+    // Legacy/manual model replies historically supplied their own phase
+    // strings. Re-derive every imported week with the deterministic
+    // scheduler so Road to Race, Upcoming, and the imported calendar cannot
+    // disagree about the athlete's macrocycle.
+    const allSessions = [...existingSessions, ...newSessions]
+    const earliestSession = allSessions.reduce((earliest, session) => {
+      const date = parseImportDate(session.date) ?? new Date(session.date)
+      return !earliest || date < earliest ? date : earliest
+    }, null)
+    const origin = profile.trainingBlockStartDate ?? earliestSession
+    const phases = new Map()
+    for (const session of newSessions) {
+      const date = parseImportDate(session.date) ?? new Date(session.date)
+      const weekStart = startOfWeekMon(date)
+      const weekKey = toISODateString(weekStart)
+      phases.set(weekKey, {
+        weekStart: weekStart.toISOString(),
+        phase: deterministicPhaseForWeek(profile, weekStart, origin),
+      })
+    }
+    newWeekPhases = [...phases.values()]
+    if (newWeekPhases.length) {
+      summary.warnings.push('Imported week phases were aligned to Cadence’s deterministic race timeline.')
+    }
   }
 
   await db.transaction('rw', db.sessions, db.weekPhases, async () => {
     if (newSessions.length) await db.sessions.bulkAdd(newSessions)
-    if (newWeekPhases.length) await db.weekPhases.bulkAdd(newWeekPhases)
+    for (const weekPhase of newWeekPhases) {
+      const weekKey = toISODateString(startOfWeekMon(new Date(weekPhase.weekStart)))
+      const existing = existingWeekPhases.find((row) => toISODateString(startOfWeekMon(new Date(row.weekStart))) === weekKey)
+      if (existing) await db.weekPhases.update(existing.id, { weekStart: weekPhase.weekStart, phase: weekPhase.phase })
+      else await db.weekPhases.add(weekPhase)
+    }
   })
 
   return summary

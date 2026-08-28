@@ -118,7 +118,7 @@ export function noCompetitionPhaseForWeekNumber(weekNumber) {
   return weekNumber <= 3 ? 'buildUp' : 'endurance'
 }
 
-function raceDrivenBasePhase(profile, weekStart) {
+export function raceDrivenBasePhase(profile, weekStart) {
   const daysOut = Math.round((asDate(profile.competitionDate) - weekStart) / 86400000)
   if (daysOut < 0) return 'recovery'
   const taperDays = profile.sport === 'running' && profile.runningDistance === 'marathon'
@@ -130,14 +130,32 @@ function raceDrivenBasePhase(profile, weekStart) {
   return 'buildUp'
 }
 
-function choosePhase(profile, recentSessions, weekPhases, weekStart, weekNumber) {
-  if (!profile.competitionDate) return noCompetitionPhaseForWeekNumber(weekNumber)
+/**
+ * Canonical scheduler-owned phase for a calendar week.
+ *
+ * Legacy/manual imports and backup restores use this same helper so an old
+ * model-authored `phase` string cannot disagree with the deterministic
+ * macrocycle shown elsewhere in Cadence. `originDate` is the start of the
+ * athlete's current training block (or the earliest imported session when a
+ * legacy backup predates that field).
+ */
+export function deterministicPhaseForWeek(profile, weekStart, originDate = weekStart, explicitWeekNumber = null) {
+  const start = startOfWeekMon(asDate(weekStart))
+  const weekNumber = Number.isInteger(explicitWeekNumber)
+    ? explicitWeekNumber
+    : weekNumberForStart(originDate, start)
 
-  const basePhase = raceDrivenBasePhase(profile, weekStart)
-  // Planned recovery/deload weeks are useful during Build-up and Endurance,
-  // but never override Peak/Taper or post-race Recovery.
+  if (!profile?.competitionDate) return noCompetitionPhaseForWeekNumber(weekNumber)
+
+  const basePhase = raceDrivenBasePhase(profile, start)
+  // Match choosePhase(): recovery cycling can interrupt Build-Up/Endurance,
+  // but it must never override the event-specific Peak/Taper windows.
   if (weekNumber > 0 && weekNumber % 4 === 0 && ['buildUp', 'endurance'].includes(basePhase)) return 'recovery'
   return basePhase
+}
+
+function choosePhase(profile, recentSessions, weekPhases, weekStart, weekNumber) {
+  return deterministicPhaseForWeek(profile, weekStart, profile.trainingBlockStartDate ?? weekStart, weekNumber)
 }
 
 function loadingWeekIndex(weekNumber) {

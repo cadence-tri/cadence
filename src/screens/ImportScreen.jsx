@@ -1,8 +1,7 @@
 import { useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { UploadCloud, GraduationCap, PenSquare, Wand2, DownloadCloud, RotateCcw, Trash2 } from 'lucide-react'
+import { GraduationCap, PenSquare, Wand2, DownloadCloud, RotateCcw, Trash2 } from 'lucide-react'
 import { db } from '../db/db'
-import { importMarkdown } from '../services/markdownImporter'
 import { encodeBackup, restoreBackup, deleteUpcoming } from '../services/backupService'
 import { format } from 'date-fns'
 
@@ -28,34 +27,6 @@ function downloadJSON(obj, filename) {
 }
 
 function PlanImportSection({ onOpenManualEntry, onOpenWizard, allSessions }) {
-  const fileRef = useRef(null)
-  const [message, setMessage] = useState(null)
-  const [isError, setIsError] = useState(false)
-  const [details, setDetails] = useState(null)
-  const [showDetails, setShowDetails] = useState(false)
-
-  const handleFile = async (e) => {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file) return
-    try {
-      const text = await readFileAsText(file)
-      const summary = await importMarkdown(text)
-      setIsError(summary.failedItems.length > 0 && summary.imported === 0)
-      setDetails(summary)
-      setShowDetails(false)
-      let msg = `Imported ${summary.imported} session(s).`
-      if (summary.skippedDuplicates > 0) msg += ` Skipped ${summary.skippedDuplicates} already in your log.`
-      if (summary.warnings.length > 0) msg += ` ${summary.warnings.length} tag(s) not recognized (imported under Other).`
-      if (summary.failedItems.length > 0) msg += ` ${summary.failedItems.length} item(s) skipped — could not be parsed.`
-      setMessage(msg)
-    } catch (err) {
-      setIsError(true)
-      setDetails(null)
-      setMessage(err.message)
-    }
-  }
-
   const lastImport = allSessions.length ? allSessions.reduce((max, s) => (s.importedAt > max ? s.importedAt : max), allSessions[0].importedAt) : null
   const isPlanEmpty = allSessions.length === 0
 
@@ -80,48 +51,13 @@ function PlanImportSection({ onOpenManualEntry, onOpenWizard, allSessions }) {
         onClick={onOpenManualEntry}
         className="w-full py-2.5 rounded-xl border border-accent text-accent font-semibold flex items-center justify-center gap-2"
       >
-        <PenSquare size={16} /> Insert by hand
+        <PenSquare size={16} /> Add activity
       </button>
-
-      <button
-        onClick={() => fileRef.current?.click()}
-        className="w-full py-2.5 rounded-xl border border-accent text-accent font-semibold flex items-center justify-center gap-2"
-      >
-        <UploadCloud size={16} /> Import from file
-      </button>
-      <input ref={fileRef} type="file" accept=".md,text/markdown,text/plain" className="hidden" onChange={handleFile} />
-
-      {message && (
-        <div className="w-full flex flex-col gap-2">
-          <p className={`text-sm ${isError ? 'text-red-600' : 'text-main-text'}`}>{message}</p>
-          {details && (details.warnings.length > 0 || details.failedItems.length > 0) && (
-            <>
-              <button onClick={() => setShowDetails((v) => !v)} className="text-xs font-semibold text-accent">
-                {showDetails ? 'Hide details' : 'Show details'}
-              </button>
-              {showDetails && (
-                <div className="p-3 rounded-xl bg-panel text-left flex flex-col gap-1.5">
-                  {details.warnings.map((w, i) => (
-                    <p key={i} className="text-xs text-minor-text">
-                      ⚠ {w}
-                    </p>
-                  ))}
-                  {details.failedItems.map((f, i) => (
-                    <p key={i} className="text-xs text-red-500">
-                      ✕ {f}
-                    </p>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
 
       <div className="w-full border-t border-minor-text/15 pt-4 flex flex-col gap-1">
         <p className="text-xs text-minor-text">{allSessions.length} sessions in your log</p>
         {lastImport && (
-          <p className="text-xs text-minor-text">Last import: {format(new Date(lastImport), 'MMM d, yyyy, h:mm a')}</p>
+          <p className="text-xs text-minor-text">Last log update: {format(new Date(lastImport), 'MMM d, yyyy, h:mm a')}</p>
         )}
       </div>
     </div>

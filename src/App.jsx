@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { Calendar, ChartLine, GraduationCap } from 'lucide-react'
+import { Calendar, ChartLine, GraduationCap, UserRound } from 'lucide-react'
 import { db, PROFILE_ID } from './db/db'
 import SplashScreen from './screens/SplashScreen'
 import LoginScreen from './screens/LoginScreen'
@@ -16,6 +16,7 @@ const TABS = [
   { id: 'daily', label: 'Daily', icon: Calendar },
   { id: 'stats', label: 'Stats', icon: ChartLine },
   { id: 'import', label: 'Coach', icon: GraduationCap },
+  { id: 'profile', label: 'Profile', icon: UserRound },
 ]
 
 function MainTabView({ profile }) {
@@ -23,10 +24,16 @@ function MainTabView({ profile }) {
   const [selectedSession, setSelectedSession] = useState(null)
   const [showingProfile, setShowingProfile] = useState(false)
   const [showingManualEntry, setShowingManualEntry] = useState(false)
+  const [manualEntryDate, setManualEntryDate] = useState(new Date())
   const [showingWizard, setShowingWizard] = useState(false)
 
   const allSessions = useLiveQuery(() => db.sessions.orderBy('date').toArray(), [], [])
   const weekPhases = useLiveQuery(() => db.weekPhases.toArray(), [], [])
+
+  const openManualEntry = (date = new Date()) => {
+    setManualEntryDate(date)
+    setShowingManualEntry(true)
+  }
 
   return (
     <div className="h-full flex flex-col bg-background">
@@ -37,6 +44,7 @@ function MainTabView({ profile }) {
             onOpenSession={setSelectedSession}
             onOpenProfile={() => setShowingProfile(true)}
             onOpenWizard={() => setShowingWizard(true)}
+            onOpenManualEntry={openManualEntry}
           />
         )}
         {tab === 'stats' && (
@@ -48,7 +56,7 @@ function MainTabView({ profile }) {
           <div className="h-full overflow-y-auto">
             <ImportScreen
               profile={profile}
-              onOpenManualEntry={() => setShowingManualEntry(true)}
+              onOpenManualEntry={() => openManualEntry()}
               onOpenWizard={() => setShowingWizard(true)}
             />
           </div>
@@ -59,18 +67,27 @@ function MainTabView({ profile }) {
         {TABS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
-            onClick={() => setTab(id)}
+            onClick={() => (id === 'profile' ? setShowingProfile(true) : setTab(id))}
             className="flex-1 flex flex-col items-center gap-0.5 py-2.5"
+            aria-current={(id === 'profile' ? showingProfile : tab === id) ? 'page' : undefined}
           >
-            <Icon size={22} className={tab === id ? 'text-accent' : 'text-minor-text'} strokeWidth={tab === id ? 2.5 : 2} />
-            <span className={`text-[10px] font-medium ${tab === id ? 'text-accent' : 'text-minor-text'}`}>{label}</span>
+            <Icon
+              size={22}
+              className={(id === 'profile' ? showingProfile : tab === id) ? 'text-accent' : 'text-minor-text'}
+              strokeWidth={(id === 'profile' ? showingProfile : tab === id) ? 2.5 : 2}
+            />
+            <span className={`text-[10px] font-medium ${(id === 'profile' ? showingProfile : tab === id) ? 'text-accent' : 'text-minor-text'}`}>
+              {label}
+            </span>
           </button>
         ))}
       </nav>
 
       {selectedSession && <SessionDetailSheet session={selectedSession} onClose={() => setSelectedSession(null)} />}
       {showingProfile && <ProfileSheet profile={profile} allSessions={allSessions} onClose={() => setShowingProfile(false)} />}
-      {showingManualEntry && <ManualEntrySheet onClose={() => setShowingManualEntry(false)} />}
+      {showingManualEntry && (
+        <ManualEntrySheet initialDate={manualEntryDate} onClose={() => setShowingManualEntry(false)} />
+      )}
       {showingWizard && (
         <PlanGenerationWizardSheet
           profile={profile}

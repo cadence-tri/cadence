@@ -228,6 +228,7 @@ export function parseMarkdown(markdown, existingSessions, existingWeekPhases) {
         sets,
         isCompleted: false,
         athleteFeedback: '',
+        perceivedEffort: null,
         importedAt: new Date().toISOString(),
         weekLabel,
         isOptional,

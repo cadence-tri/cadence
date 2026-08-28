@@ -3,7 +3,7 @@ import { Plus, Trash2 } from 'lucide-react'
 import Sheet from './Sheet'
 import { DISCIPLINES, disciplineDisplayName } from '../db/discipline'
 import { newSet, makeImportKey } from '../db/session'
-import { toISODateString } from '../services/dateUtils'
+import { parseImportDate, toISODateString } from '../services/dateUtils'
 import { db } from '../db/db'
 
 function StepEditorRow({ step, discipline, onChange, onDelete }) {
@@ -48,10 +48,10 @@ function StepEditorRow({ step, discipline, onChange, onDelete }) {
   )
 }
 
-/** "Insert by hand" — add a single session without a plan file. Ported
+/** "Add activity" — add a single session outside the generated plan. Ported
  * from ManualEntryView.swift. */
-export default function ManualEntrySheet({ onClose, onSaved }) {
-  const [date, setDate] = useState(toISODateString(new Date()))
+export default function ManualEntrySheet({ onClose, onSaved, initialDate = new Date() }) {
+  const [date, setDate] = useState(toISODateString(initialDate))
   const [discipline, setDiscipline] = useState('run')
   const [title, setTitle] = useState('')
   const [notes, setNotes] = useState('')
@@ -86,7 +86,9 @@ export default function ManualEntrySheet({ onClose, onSaved }) {
     }
 
     const trimmedTitle = title.trim() || disciplineDisplayName(discipline)
-    const dateObj = new Date(date)
+    // Parse as local calendar midnight so a selected Training Log day does
+    // not shift backward when the athlete is west of UTC.
+    const dateObj = parseImportDate(date)
     const session = {
       date: dateObj.toISOString(),
       discipline,
@@ -108,7 +110,7 @@ export default function ManualEntrySheet({ onClose, onSaved }) {
 
   return (
     <Sheet
-      title="Insert by Hand"
+      title="Add Activity"
       onClose={onClose}
       footer={
         <button onClick={save} className="w-full py-2.5 rounded-xl bg-accent text-white font-semibold">

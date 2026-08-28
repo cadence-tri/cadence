@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { buildPlanSkeleton } from '../src/services/planning/planScheduler.js'
 import { validateSkeleton, validateGeneratedPlan, mergeGeneratedWithSkeleton } from '../src/services/planning/planValidator.js'
 import { runningPaceTargets, parseDurationSeconds } from '../src/services/planning/planRules.js'
+import { effortLabel, sessionDistanceKmForDisplay, withAllSetsCompleted } from '../src/db/session.js'
 
 const profile = (overrides = {}) => ({
   id: 1,
@@ -32,6 +33,41 @@ const profile = (overrides = {}) => ({
 
 const today = new Date('2026-08-28T12:00:00')
 const normalCheckIn = { recovery: 'normal', painLevel: 'none', previousBlockLoad: 'aboutRight' }
+
+test('session feedback distance switches from prescribed to completed work', () => {
+  const pending = {
+    discipline: 'run',
+    totalDistance: 8.3,
+    sets: [{ distanceM: 2000, isCompleted: false, isSkipped: false }],
+  }
+  assert.equal(sessionDistanceKmForDisplay(pending), 8.3)
+
+  const addressed = {
+    ...pending,
+    sets: [
+      { distanceM: 2000, isCompleted: true, isSkipped: false },
+      { distanceM: 500, setsCount: 4, isCompleted: false, isSkipped: true },
+    ],
+  }
+  assert.equal(sessionDistanceKmForDisplay(addressed), 2)
+  assert.equal(effortLabel(0), 'Easy')
+  assert.equal(effortLabel(6), 'Moderate')
+  assert.equal(effortLabel(10), 'Very hard')
+})
+
+test('bulk session completion marks every prescribed step done and clears skipped states', () => {
+  const session = {
+    sets: [
+      { isCompleted: false, isSkipped: false },
+      { isCompleted: false, isSkipped: true },
+    ],
+  }
+  const completed = withAllSetsCompleted(session, true)
+  assert.ok(completed.sets.every((set) => set.isCompleted && !set.isSkipped))
+
+  const cleared = withAllSetsCompleted(completed, false)
+  assert.ok(cleared.sets.every((set) => !set.isCompleted && !set.isSkipped))
+})
 
 test('first plan gets partial week plus two full weeks and respects Beginner recovery floors', () => {
   const p = profile()
@@ -117,7 +153,7 @@ test('hybrid markdown parsing preserves validation metadata while duplicate stor
 })
 
 test('v3 backup profile normalization fixes the singleton id and sanitizes scheduling fields', async () => {
-  const { normalizeProfileLoose } = await import('../src/services/backupService.js')
+  const { normalizeProfileLoose, normalizePerceivedEffort } = await import('../src/services/backupService.js')
   const normalized = normalizeProfileLoose({ id: 99, sport: 'nonsense', trainingDaysPerWeek: 99, longSessionDays: [1, 1, 8, '2'], excludeGymSessions: 1, strengthPreferenceConfigured: 1 })
   assert.equal(normalized.id, 1)
   assert.equal(normalized.sport, 'triathlon')
@@ -125,6 +161,10 @@ test('v3 backup profile normalization fixes the singleton id and sanitizes sched
   assert.deepEqual(normalized.longSessionDays.sort(), [1, 2])
   assert.equal(normalized.excludeGymSessions, true)
   assert.equal(normalized.strengthPreferenceConfigured, true)
+  assert.equal(normalizePerceivedEffort(null), null)
+  assert.equal(normalizePerceivedEffort(''), null)
+  assert.equal(normalizePerceivedEffort('7.4'), 7)
+  assert.equal(normalizePerceivedEffort(12), 10)
 })
 
 test('legacy backup phase normalization uses the current profile instead of imported phase labels', async () => {
@@ -423,6 +463,24 @@ test('new-profile screen exposes and persists gym/bodyweight preferences before 
   assert.match(login, /bodyweightOnlyStrength:\s*excludeGymSessions && bodyweightOnlyStrength/)
   assert.match(wizard, /!strengthPreferenceConfigured/)
   assert.match(profileDefaults, /strengthPreferenceConfigured:\s*false/)
+})
+
+test('Add activity is available from Training Log and legacy markdown file import is removed from Coach', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const app = await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8')
+  const daily = await readFile(new URL('../src/screens/DailyScreen.jsx', import.meta.url), 'utf8')
+  const coach = await readFile(new URL('../src/screens/ImportScreen.jsx', import.meta.url), 'utf8')
+  const manualEntry = await readFile(new URL('../src/components/ManualEntrySheet.jsx', import.meta.url), 'utf8')
+
+  assert.match(daily, /onOpenManualEntry\(trainingLogSelectedDate\)/)
+  assert.match(daily, /Add activity/)
+  assert.match(coach, /Add activity/)
+  assert.match(manualEntry, /title="Add Activity"/)
+  assert.match(app, /initialDate=\{manualEntryDate\}/)
+  assert.match(manualEntry, /initialDate = new Date\(\)/)
+  assert.match(manualEntry, /parseImportDate\(date\)/)
+  assert.doesNotMatch(coach, /Import from file|accept="\.md/)
+  assert.doesNotMatch(coach, /importMarkdown/)
 })
 
 

@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { Trash2 } from 'lucide-react'
+import { PenSquare, Trash2 } from 'lucide-react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
 import ProfileHeaderBar from '../components/ProfileHeaderBar'
@@ -14,7 +14,7 @@ import { startOfDay, startOfWeekMon, addWeeks, addDays, isSameDay, asDate } from
 
 const FILTERS = ['Overview', 'Upcoming', 'Training Log']
 
-export default function DailyScreen({ profile, onOpenSession, onOpenProfile, onOpenWizard }) {
+export default function DailyScreen({ profile, onOpenSession, onOpenProfile, onOpenWizard, onOpenManualEntry }) {
   const [filter, setFilter] = useState('Overview')
   const [showingWeekPicker, setShowingWeekPicker] = useState(false)
 
@@ -136,6 +136,13 @@ export default function DailyScreen({ profile, onOpenSession, onOpenProfile, onO
               canGoNext={canGoNext}
               onTapLabel={() => setShowingWeekPicker(true)}
             />
+            <button
+              type="button"
+              onClick={() => onOpenManualEntry(trainingLogSelectedDate)}
+              className="w-full py-2.5 rounded-xl border border-accent text-accent font-semibold flex items-center justify-center gap-2"
+            >
+              <PenSquare size={16} /> Add activity
+            </button>
             <SelectedDayCard
               date={trainingLogSelectedDate}
               sessions={trainingLogSelectedDaySessions}

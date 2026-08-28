@@ -1,6 +1,6 @@
 import schemaText from '../assets/PLAN_SCHEMA.md?raw'
 import { RUNNING_META, TRIATHLON_META } from '../db/raceDistance'
-import { setSummary } from '../db/session'
+import { setSummary, sessionDistanceKmForDisplay, effortLabel } from '../db/session'
 import { phaseDisplayName } from '../db/phase'
 import { phaseForDate } from '../db/weekPhase'
 import { disciplineDisplayName } from '../db/discipline'
@@ -35,6 +35,16 @@ export function serializeSessions(sessions) {
         const status = set.isCompleted ? '[done]' : set.isSkipped ? '[skipped]' : '[not completed]'
         lines.push(`  ${status} ${setSummary(set)}`)
       }
+    }
+    const distanceKm = sessionDistanceKmForDisplay(session)
+    if (distanceKm != null) {
+      const distance = session.discipline === 'swim'
+        ? `${Math.round(distanceKm * 1000)}m`
+        : `${Number(distanceKm.toFixed(2))}km`
+      lines.push(`  session distance: ${distance}`)
+    }
+    if (session.perceivedEffort != null) {
+      lines.push(`  perceived effort: ${session.perceivedEffort}/10 (${effortLabel(session.perceivedEffort)})`)
     }
     if (session.athleteFeedback) lines.push(`  feedback: ${session.athleteFeedback}`)
     if (session.notes) lines.push(`  notes: ${session.notes}`)

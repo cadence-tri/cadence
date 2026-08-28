@@ -140,6 +140,37 @@ export function derivedDistanceKm(session) {
   return totalDistanceKm(session)
 }
 
+/** Distance shown in session feedback. Before the athlete addresses any
+ * distance-bearing steps, show the prescribed whole-session total. Once
+ * steps are marked done/skipped, show only completed distance so the card
+ * reflects what was actually performed. */
+export function sessionDistanceKmForDisplay(session) {
+  const distanceBearingSets = (session.sets ?? []).filter((s) => s.distanceM != null)
+  const hasAddressedDistance = distanceBearingSets.some((s) => s.isCompleted || s.isSkipped)
+
+  if (hasAddressedDistance) {
+    const completedMeters = distanceBearingSets
+      .filter((s) => s.isCompleted)
+      .reduce((sum, s) => sum + s.distanceM * (s.setsCount ?? 1), 0)
+    return completedMeters / 1000
+  }
+
+  const prescribedTotal = totalDistanceKm(session)
+  if (prescribedTotal != null) return prescribedTotal
+  if (distanceBearingSets.length === 0) return null
+
+  return distanceBearingSets.reduce((sum, s) => sum + s.distanceM * (s.setsCount ?? 1), 0) / 1000
+}
+
+export function effortLabel(value) {
+  if (value == null) return 'Not rated'
+  if (value <= 2) return 'Easy'
+  if (value <= 4) return 'Light'
+  if (value <= 6) return 'Moderate'
+  if (value <= 8) return 'Hard'
+  return 'Very hard'
+}
+
 /** Bulk-marks every set done/undone — the "tap the ring" shortcut. Always
  * clears any per-set skip marks, since a bulk action is a clean
  * all-done-or-all-undone reset, not a partial/skip state. */

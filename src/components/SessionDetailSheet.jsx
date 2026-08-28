@@ -5,7 +5,15 @@ import Sheet from './Sheet'
 import CompletionRing from './CompletionRing'
 import { OptionalBadge } from './SessionRow'
 import { disciplineIcon, disciplineColor, disciplineDisplayName } from '../db/discipline'
-import { completionFraction, addressedSetCount, setSummary, makeImportKey } from '../db/session'
+import {
+  completionFraction,
+  addressedSetCount,
+  setSummary,
+  makeImportKey,
+  sessionDistanceKmForDisplay,
+  effortLabel,
+  withAllSetsCompleted,
+} from '../db/session'
 import { startOfWeekMon, addDays, asDate, isSameDay } from '../services/dateUtils'
 import { db } from '../db/db'
 
@@ -158,6 +166,15 @@ export default function SessionDetailSheet({ session, onClose }) {
 
   const Icon = disciplineIcon(local.discipline)
   const color = disciplineColor(local.discipline)
+  const distanceKm = sessionDistanceKmForDisplay(local)
+  const distanceText = distanceKm == null
+    ? '—'
+    : local.discipline === 'swim'
+      ? `${Math.round(distanceKm * 1000).toLocaleString()} m`
+      : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(distanceKm)} km`
+  const allPrescribedDone = local.sets?.length > 0
+    ? local.sets.every((set) => set.isCompleted)
+    : !!local.isCompleted
 
   const persist = async (patch) => {
     const updated = { ...local, ...patch }
@@ -182,6 +199,13 @@ export default function SessionDetailSheet({ session, onClose }) {
     persist({ sets })
   }
 
+  const toggleAllSteps = () => {
+    const updated = withAllSetsCompleted(local, !allPrescribedDone)
+    persist(local.sets?.length > 0
+      ? { sets: updated.sets, isCompleted: updated.isCompleted }
+      : { isCompleted: updated.isCompleted })
+  }
+
   const editSet = (index, newSet) => {
     const sets = local.sets.map((s, i) => (i === index ? newSet : s))
     setLocal({ ...local, sets })
@@ -200,7 +224,15 @@ export default function SessionDetailSheet({ session, onClose }) {
     <Sheet title={local.title} onClose={onClose}>
       <div className="p-4 flex flex-col gap-6">
         <div className="flex items-center gap-3.5">
-          <CompletionRing fraction={completionFraction(local)} color={color} size={36} strokeWidth={4} />
+          <button
+            type="button"
+            onClick={toggleAllSteps}
+            className="shrink-0 rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            aria-label={allPrescribedDone ? 'Mark all prescribed steps not done' : 'Mark all prescribed steps done'}
+            aria-pressed={allPrescribedDone}
+          >
+            <CompletionRing fraction={completionFraction(local)} color={color} size={36} strokeWidth={4} />
+          </button>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2" style={{ color }}>
               <Icon size={16} />
@@ -274,6 +306,55 @@ export default function SessionDetailSheet({ session, onClose }) {
             className="w-full p-3 rounded-xl bg-panel text-main-text outline-none resize-none"
             placeholder="How did it go?"
           />
+
+          <div className="grid grid-cols-2 gap-3 mt-3">
+            <div className="rounded-xl bg-panel p-3">
+              <div className="text-xs text-minor-text">Perceived effort</div>
+              <div className="mt-1 text-2xl font-bold text-main-text">
+                {local.perceivedEffort == null ? '—' : `${local.perceivedEffort}/10`}
+              </div>
+              <div className="text-xs text-minor-text">{effortLabel(local.perceivedEffort)}</div>
+            </div>
+            <div className="rounded-xl bg-panel p-3">
+              <div className="text-xs text-minor-text">Total distance</div>
+              <div className="mt-1 text-2xl font-bold text-main-text">{distanceText}</div>
+              <div className="text-xs text-minor-text">
+                {distanceKm == null ? 'Not applicable' : 'Session total'}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-3 rounded-xl bg-panel px-3 py-3">
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <label htmlFor={`effort-${local.id}`} className="text-xs font-semibold text-main-text">
+                Rate this session
+              </label>
+              {local.perceivedEffort != null && (
+                <button
+                  type="button"
+                  onClick={() => persist({ perceivedEffort: null })}
+                  className="text-xs font-semibold text-accent"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <input
+              id={`effort-${local.id}`}
+              type="range"
+              min="0"
+              max="10"
+              step="1"
+              value={local.perceivedEffort ?? 5}
+              onChange={(e) => persist({ perceivedEffort: Number(e.target.value) })}
+              aria-valuetext={local.perceivedEffort == null ? 'Not rated' : `${local.perceivedEffort} out of 10, ${effortLabel(local.perceivedEffort)}`}
+              className="w-full accent-[var(--color-accent)]"
+            />
+            <div className="flex justify-between text-[10px] text-minor-text mt-1">
+              <span>0 · Easy</span>
+              <span>10 · Hard</span>
+            </div>
+          </div>
         </div>
       </div>
     </Sheet>

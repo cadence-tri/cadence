@@ -12,6 +12,12 @@ export const CURRENT_FORMAT_VERSION = 3
 
 export class BackupError extends Error {}
 
+export function normalizePerceivedEffort(raw) {
+  if (raw == null || String(raw).trim() === '') return null
+  const value = Number(raw)
+  return Number.isFinite(value) ? Math.min(10, Math.max(0, Math.round(value))) : null
+}
+
 /** Serializes the complete athlete profile, every session, and week-phase label into one backup object. */
 export async function encodeBackup() {
   const [profile, sessions, weekPhases, raceProjections] = await Promise.all([db.profile.get(PROFILE_ID), db.sessions.toArray(), db.weekPhases.toArray(), db.raceProjections?.toArray() ?? []])
@@ -28,6 +34,7 @@ export async function encodeBackup() {
       sets: s.sets ?? [],
       isCompleted: !!s.isCompleted,
       athleteFeedback: s.athleteFeedback ?? '',
+      perceivedEffort: s.perceivedEffort ?? null,
       importedAt: asDate(s.importedAt)?.toISOString() ?? new Date().toISOString(),
       weekLabel: s.weekLabel ?? null,
       isOptional: !!s.isOptional,
@@ -130,6 +137,7 @@ export async function restoreBackup(fileText) {
       sets: Array.isArray(dto.sets) ? dto.sets : [],
       isCompleted: !!dto.isCompleted,
       athleteFeedback: dto.athleteFeedback ?? '',
+      perceivedEffort: normalizePerceivedEffort(dto.perceivedEffort),
       importedAt: asDate(dto.importedAt)?.toISOString() ?? new Date().toISOString(),
       weekLabel: dto.weekLabel ?? null,
       isOptional: !!dto.isOptional,

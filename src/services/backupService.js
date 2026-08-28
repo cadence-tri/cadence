@@ -13,7 +13,7 @@ export class BackupError extends Error {}
 
 /** Serializes the complete athlete profile, every session, and week-phase label into one backup object. */
 export async function encodeBackup() {
-  const [profile, sessions, weekPhases] = await Promise.all([db.profile.get(PROFILE_ID), db.sessions.toArray(), db.weekPhases.toArray()])
+  const [profile, sessions, weekPhases, raceProjections] = await Promise.all([db.profile.get(PROFILE_ID), db.sessions.toArray(), db.weekPhases.toArray(), db.raceProjections?.toArray() ?? []])
   return {
     formatVersion: CURRENT_FORMAT_VERSION,
     exportedAt: new Date().toISOString(),
@@ -36,6 +36,7 @@ export async function encodeBackup() {
       weekStart: asDate(wp.weekStart).toISOString(),
       phase: wp.phase,
     })),
+    raceProjections: raceProjections.map(({ id, ...projection }) => projection),
   }
 }
 
@@ -111,13 +112,18 @@ export async function restoreBackup(fileText) {
     weekStart: (asDate(dto.weekStart) ?? new Date()).toISOString(),
     phase: normalizePhaseLoose(dto.phase),
   }))
+  const raceProjectionsToInsert = (Array.isArray(file.raceProjections) ? file.raceProjections : [])
+    .filter((p) => p?.raceKey && p?.date && Number.isFinite(p?.projectedSeconds))
+    .map(({ id, ...projection }) => projection)
 
-  await db.transaction('rw', db.profile, db.sessions, db.weekPhases, async () => {
+  await db.transaction('rw', db.profile, db.sessions, db.weekPhases, db.raceProjections, async () => {
     await db.sessions.clear()
     await db.weekPhases.clear()
+    await db.raceProjections.clear()
     if (profileToRestore) await db.profile.put(profileToRestore)
     if (sessionsToInsert.length) await db.sessions.bulkAdd(sessionsToInsert)
     if (weekPhasesToInsert.length) await db.weekPhases.bulkAdd(weekPhasesToInsert)
+    if (raceProjectionsToInsert.length) await db.raceProjections.bulkAdd(raceProjectionsToInsert)
   })
 
   return sessionsToInsert.length

@@ -18,6 +18,15 @@ db.version(1).stores({
   weekPhases: '++id, &weekStart',
 })
 
+// Daily snapshots of deterministic race projections let Road to Race show
+// direction of travel without retrospectively rewriting history.
+db.version(2).stores({
+  profile: 'id',
+  sessions: '++id, date, discipline, importKey, importedAt',
+  weekPhases: '++id, &weekStart',
+  raceProjections: '++id, &[raceKey+date], raceKey, date',
+})
+
 export const PROFILE_ID = 1
 
 export default db

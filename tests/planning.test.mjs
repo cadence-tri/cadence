@@ -489,3 +489,38 @@ test('race-dated plans insert deloads during build/endurance but never override 
   const skeleton = buildPlanSkeleton({ profile: p, recentSessions: history, planHistory: history, weekPhases: phases, checkIn: normalCheckIn, today })
   assert.ok(skeleton.weeks.every((week) => ['buildUp', 'endurance', 'recovery', 'peak', 'taper'].includes(week.phase)))
 })
+
+import { raceProjection } from '../src/services/raceProjection.js'
+
+test('race projection stays in building state when there is no performance evidence', () => {
+  const p = profile({ competitionDate: '2027-04-25', runningDistance: 'marathon' })
+  const result = raceProjection(p, [], today)
+  assert.equal(result.status, 'building')
+})
+
+test('running race projection uses athlete threshold evidence without treating goal time as fitness evidence', () => {
+  const p = profile({
+    competitionDate: '2027-04-25',
+    runningDistance: 'marathon',
+    goalOverallTime: '3:00:00',
+    onboardingThresholdDetails: "4'30/km run threshold",
+  })
+  const result = raceProjection(p, [], today)
+  assert.equal(result.status, 'ready')
+  assert.equal(result.evidence, 'athlete threshold')
+  assert.ok(result.seconds > 3 * 3600, 'low endurance readiness should keep the estimate more conservative than the ambitious goal')
+  assert.ok(result.upperSeconds > result.seconds)
+  assert.ok(result.lowerSeconds < result.seconds)
+})
+
+test('triathlon projection refuses a full finish estimate while a discipline lacks evidence', () => {
+  const p = profile({
+    sport: 'triathlon',
+    competitionDate: '2027-06-01',
+    triathlonDistance: 'olympic',
+    onboardingThresholdDetails: "1:45/100m swim threshold, 4'30/km run threshold, 250W FTP",
+  })
+  const result = raceProjection(p, [], today)
+  assert.equal(result.status, 'building')
+  assert.match(result.reason, /bike/i)
+})

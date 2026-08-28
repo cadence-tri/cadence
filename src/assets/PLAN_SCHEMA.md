@@ -1,14 +1,18 @@
 # Training Plan Format — Governance Document
 
 **Purpose:** every plan written in this project has two audiences at once —
-Matteo, reading prose, and the TriathlonLog app, parsing JSON. This document
-is the single source of truth for that dual structure. Read it before
-writing or editing any plan file. If the schema ever needs to change,
-update this document **and** the app's `TrainingSession.swift` /
-`MarkdownImporter.swift` in the same pass — they must never drift apart.
+the athlete, reading human-friendly coaching prose, and Cadence, parsing the
+structured session JSON. This document is the single source of truth for that
+dual structure. Read it before writing or editing any plan output. If the
+schema changes, update this document together with Cadence's session model,
+importer, scheduler/validator contract, and the bundled copy under
+`src/assets/` so they never drift apart.
 
-`Hamburg_2027_Plan_Weeks_3-4.md` (as of this document) is the canonical
-worked example. When in doubt, match its structure.
+The generic skeleton in §1 is the canonical **formatting example**. It is
+deliberately athlete-, date-, sport-, and week-number-neutral. For hybrid
+blocks, Cadence's locked schedule is authoritative for dates, week labels,
+disciplines, phases, and target totals; never infer those values from an
+example.
 
 ---
 
@@ -50,7 +54,7 @@ data is embedded, not separate. The recurring shape:
 
 Rules:
 - **One `session` fenced block per week**, placed right after that week's
-  prose (not interleaved per-day — see `Hamburg_2027_Plan_Weeks_3-4.md`).
+  prose (not interleaved per-day — follow the generic skeleton above).
 - The block is a JSON **array**, even for weeks with only one session on
   some days — consistency matters more than minimalism.
 - A day with two sessions (e.g. swim + gym) gets **two array items**
@@ -71,10 +75,13 @@ Every item in a week's JSON array is one session:
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `date` | string `"YYYY-MM-DD"` | **yes** | Exact ISO date, no time component. |
+| `skeletonId` | string | required for Cadence hybrid-generated blocks; otherwise optional | Opaque ID copied exactly from Cadence's locked schedule. It lets the importer validate the AI response against the deterministic session. Do not invent or alter it. Legacy/manual imports may omit it. |
+| `skeletonRole` | string | required for Cadence hybrid-generated blocks; otherwise optional | Echo the locked scheduler role (`easy`, `quality`, `long`, `brick`, `strength`, etc.) exactly. Used only for validation and not stored in the session database. |
+| `brickTargets` | object | required for hybrid-generated `brick` sessions; otherwise optional | Echo Cadence's locked `{ bikeKm, runKm }` values exactly. Used for validation and not stored permanently. |
 | `discipline` | string | **yes** | One of: `swim`, `bike`, `run`, `brick`, `gym`, `rest`, `other`. Case-insensitive on import, but always write lowercase. Anything else imports under "Other" with a warning — never silently dropped, but also never what you want on purpose. |
 | `title` | string | **yes** | Short, human-readable. **Keep stable across re-imports of the same day** — the app de-duplicates on `date + discipline + title`; changing the title for an already-imported day creates a duplicate instead of updating it. |
 | `phase` | string | recommended | The macro training phase this week belongs to. Must exactly match one of the six governed phase names (§3). Omit only for one-off/ungoverned content; every regular week should have it. |
-| `weekLabel` | string | recommended | E.g. `"Week 3"`. Matches the `## Week N` heading. |
+| `weekLabel` | string | **required for Cadence hybrid-generated blocks; otherwise recommended** | E.g. `"Week 9"`. For hybrid blocks, copy the locked Cadence `weekLabel` exactly into every session and use the same label in the `## Week N` heading. Never infer/restart numbering from worked examples. |
 | `totalDistance` | number | **yes**, for `swim`/`bike`/`run` | Total distance for the *whole session*, not a single rep — see below. Omit for `gym`/`rest`/`other`; for `brick`, only include it if the whole session is one clean unit (rare — usually skip it and let the per-segment distances in `sets` carry the detail instead). |
 | `notes` | string | optional | Coach context for this specific session (form cues, "choose one" instructions, injury flags, etc). |
 | `sets` | array of set objects | optional | The structured prescription. Omit or leave empty for a plain rest day with no structured content. |
@@ -102,7 +109,7 @@ all (it falls back to a rougher, duration-based estimate instead — see
 drop the `~` and unit, keep the number).
 
 Canonical field order (cosmetic only, but keep it consistent for
-readability): `date`, `phase`, `discipline`, `title`, `weekLabel`,
+readability): `skeletonId` (when supplied by Cadence), `skeletonRole` (when supplied by Cadence), `date`, `phase`, `discipline`, `title`, `weekLabel`,
 `totalDistance`, `notes`, `sets`.
 
 ---
@@ -135,12 +142,11 @@ in the same pass; they must never drift apart. Do not reintroduce a
 per-discipline or per-roadmap-phase vocabulary (e.g. "Marathon-Specific
 Build" vs "Triathlon-Specific Build") without updating both sides together.
 
-**Recovery-week check:** if a plan spans 14 or more consecutive weeks with
-no week labelled `Recovery`, `Maintenance`, or `Taper` anywhere in that
-span, flag this to the athlete before finalizing the plan and suggest
-scheduling one or two easier weeks — training blocks this long without a
-deload are a known overtraining risk. (The app also surfaces this as a
-banner on the Overview tab if it's missed here.)
+**Recovery weeks in Cadence hybrid plans are scheduler-owned.** The deterministic
+scheduler inserts planned deload weeks and locks their `Recovery` phase before
+the AI sees the block. Do not add, remove, or move a recovery week in a hybrid
+generation. For legacy/manual plans without a locked schedule, avoid long
+uninterrupted loading stretches and include periodic recovery/deload weeks.
 
 ---
 
@@ -217,7 +223,9 @@ double-check before shipping a plan.
 - [ ] Every week's prose has a matching `\`\`\`session` block placed right
       after it.
 - [ ] Every session object has `date`, `discipline`, `title`, and — for
-      any regular week — `phase` and `weekLabel`.
+      any regular week — `phase` and `weekLabel`. For Cadence hybrid-generated
+      blocks, `weekLabel` is locked: it must exactly match the label supplied
+      by Cadence for that calendar week.
 - [ ] Every `swim`/`bike`/`run` session has a `totalDistance` — km for
       bike/run, meters for swim (§2). Double-check the unit, not just
       the presence of the field: a bike ride entered in meters (or a
@@ -552,3 +560,34 @@ experience tier (§7.7) — the two stack, they don't override each other:
   §7.5's day-count limit is — it never overrides §7.7's weekly-increase
   cap or §7.5's day-count ceiling, it just nudges volume lower within
   whatever range those already allow.
+
+### 7.10 Deterministic load cycling and no-race-date macrocycle
+
+For **Cadence hybrid-generated plans**, phase and weekly target volume are
+scheduler-owned locked fields. The AI elaborates the sessions but must not
+change this progression pattern.
+
+- Full training weeks use a **3:1 load/deload rhythm**: three loading weeks,
+  then one `Recovery` week. The recovery week intentionally reduces weekly
+  volume and removes quality work; it is not a failed progression week.
+- Within a loading phase, Cadence uses the phase's full §7.1 volume range
+  rather than a permanent midpoint. The target moves upward across the three
+  loading weeks, subject to §7.7's tier-specific increase cap, demonstrated
+  capacity, lifestyle bias, and structured check-in recovery/pain signals.
+- A planned recovery week is calculated from the most recent completed
+  **non-recovery** load week. The following loading week also resumes from the
+  last non-recovery baseline, so the deload itself never becomes a lower
+  progression ceiling.
+- When a **competition date is set**, race proximity determines the underlying
+  Build-up / Endurance / Peak / Taper macro phase. The 3:1 recovery rhythm may
+  interrupt Build-up or Endurance, but never overrides Peak, Taper, or
+  post-race Recovery.
+- When **no competition date is set**, Cadence must not remain in Build-up
+  indefinitely: full Weeks 1-3 are `Build-up`, Week 4 is `Recovery`, and from
+  Week 5 onward the athlete rolls through three `Endurance` loading weeks
+  followed by one `Recovery` week. `Peak` and `Taper` are reserved for plans
+  with an actual upcoming competition date.
+- The opening partial Week 0, when present, remains a scaled introductory
+  `Build-up` stretch and does not count as a full loading week or as evidence
+  for the next week's progression baseline.
+

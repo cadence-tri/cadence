@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Wand2, Copy, Check } from 'lucide-react'
 import Sheet from './Sheet'
 import { db } from '../db/db'
-import { buildCheckInPrompt } from '../services/planPromptBuilder'
+import { preparePlanGeneration } from '../services/planning/planGeneration'
 import { mostRecentBlock } from '../services/planBlockTrigger'
 import { capacityWarningMessage } from '../services/trainingCapacityWarning'
 import { importMarkdown } from '../services/markdownImporter'
@@ -47,18 +47,21 @@ function QuestionBlock({ label, children }) {
 function SelectGroup({ value, onChange, options }) {
   return (
     <div className={`grid gap-1 bg-panel rounded-xl p-1`} style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}>
-      {options.map((opt) => (
-        <button
-          key={opt}
-          type="button"
-          onClick={() => onChange(opt)}
-          className={`py-2 px-1 rounded-lg text-xs font-semibold leading-tight ${
-            value === opt ? 'bg-accent text-white' : 'text-main-text'
-          }`}
-        >
-          {opt}
-        </button>
-      ))}
+      {options.map((option) => {
+        const opt = typeof option === 'string' ? { value: option, label: option } : option
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            className={`py-2 px-1 rounded-lg text-xs font-semibold leading-tight ${
+              value === opt.value ? 'bg-accent text-white' : 'text-main-text'
+            }`}
+          >
+            {opt.label}
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -88,6 +91,7 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
   const [stage, setStage] = useState('note') // note | prompt | pasteBack | result
   const [note, setNote] = useState('')
   const [prompt, setPrompt] = useState('')
+  const [skeleton, setSkeleton] = useState(null)
   const [pastedReply, setPastedReply] = useState('')
   const [copied, setCopied] = useState(false)
   const [summary, setSummary] = useState(null)
@@ -136,8 +140,17 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
   const [priorStructuredPlan, setPriorStructuredPlan] = useState(null)
   const [consistencyRating, setConsistencyRating] = useState('')
 
-  const askGymQuestion = isPlanEmpty && !profile.excludeGymSessions
-  const askBodyweightQuestion = isPlanEmpty && (profile.excludeGymSessions || includeGym === false)
+  // Returning-athlete structured check-in. These values are deliberately
+  // transient generation inputs: the deterministic scheduler consumes them,
+  // while the free-text note is still passed through to the AI as context.
+  const [recovery, setRecovery] = useState('normal')
+  const [painLevel, setPainLevel] = useState('none')
+  const [painDetails, setPainDetails] = useState('')
+  const [previousBlockLoad, setPreviousBlockLoad] = useState('aboutRight')
+
+  const strengthPreferenceConfigured = profile.strengthPreferenceConfigured === true
+  const askGymQuestion = isPlanEmpty && !strengthPreferenceConfigured && !profile.excludeGymSessions
+  const askBodyweightQuestion = isPlanEmpty && !strengthPreferenceConfigured && (profile.excludeGymSessions || includeGym === false)
   const isTriathlete = profile.sport === 'triathlon'
 
   const buildPrompt = async () => {
@@ -180,6 +193,7 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
           // fresh bodyweight answer given during onboarding.
           ...(askGymQuestion ? { excludeGymSessions: includeGym === false } : {}),
           ...(askBodyweightQuestion ? { bodyweightOnlyStrength: bodyweightSessions === true } : {}),
+          ...((askGymQuestion || askBodyweightQuestion) ? { strengthPreferenceConfigured: true } : {}),
         }
         effectiveProfile = { ...profile, ...onboardingFields }
         await db.profile.update(profile.id, onboardingFields)
@@ -192,15 +206,19 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
         triathlonDistance: effectiveProfile.triathlonDistance,
         trainingDaysPerWeek: effectiveProfile.trainingDaysPerWeek,
       })
-      const athleteNote = isPlanEmpty ? '' : note
-      const text = buildCheckInPrompt({
+      const checkIn = isPlanEmpty
+        ? { recovery: 'normal', painLevel: 'none', previousBlockLoad: 'aboutRight', painDetails: '', note: '' }
+        : { recovery, painLevel, previousBlockLoad, painDetails: painLevel === 'none' ? '' : painDetails.trim(), note: note.trim() }
+      const generation = preparePlanGeneration({
         profile: effectiveProfile,
         recentSessions: block,
+        planHistory: allSessions,
         weekPhases,
-        athleteNote,
+        checkIn,
         capacityWarningText,
       })
-      setPrompt(text)
+      setSkeleton(generation.skeleton)
+      setPrompt(generation.prompt)
       setCopied(false)
       setStage('prompt')
     } catch (e) {
@@ -220,7 +238,7 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
   const commitImport = async (markdown) => {
     setError(null)
     try {
-      const result = await importMarkdown(markdown)
+      const result = await importMarkdown(markdown, skeleton ? { skeleton } : {})
       setSummary(result)
       setStage('result')
     } catch (e) {
@@ -506,15 +524,58 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
             ) : (
               <>
                 <p className="text-sm text-minor-text">
-                  Anything worth flagging before the next 2 weeks are generated — fatigue, a niggle, a session that
-                  felt great, a schedule conflict coming up. Leave it blank to just continue the plan as progressed.
+                  A few structured signals help Cadence size the next block consistently. Add any schedule conflicts,
+                  unusual context, or other detail in the free-text note at the end.
                 </p>
-                <textarea
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                  rows={6}
-                  className="w-full p-3 rounded-xl bg-panel text-main-text outline-none resize-none"
-                />
+
+                <QuestionBlock label="How recovered do you feel?">
+                  <SelectGroup
+                    value={recovery}
+                    onChange={setRecovery}
+                    options={[{ value: 'great', label: 'Great' }, { value: 'normal', label: 'Normal' }, { value: 'fatigued', label: 'Fatigued' }, { value: 'veryFatigued', label: 'Very fatigued' }]}
+                  />
+                </QuestionBlock>
+
+                <QuestionBlock label="How manageable was the previous block?">
+                  <SelectGroup
+                    value={previousBlockLoad}
+                    onChange={setPreviousBlockLoad}
+                    options={[{ value: 'tooEasy', label: 'Too easy' }, { value: 'aboutRight', label: 'About right' }, { value: 'tooHard', label: 'Too hard' }]}
+                  />
+                </QuestionBlock>
+
+                <QuestionBlock label="Any pain or injury concern right now?">
+                  <SelectGroup value={painLevel} onChange={setPainLevel} options={[{ value: 'none', label: 'None' }, { value: 'mild', label: 'Mild' }, { value: 'significant', label: 'Significant' }]} />
+                  {painLevel !== 'none' && (
+                    <textarea
+                      value={painDetails}
+                      onChange={(e) => setPainDetails(e.target.value)}
+                      rows={2}
+                      placeholder="Affected area and what you are feeling"
+                      className={`${inputClass} resize-none`}
+                    />
+                  )}
+                </QuestionBlock>
+
+                {painLevel === 'significant' && (
+                  <p className="text-xs text-red-500">
+                    Cadence will reduce the training load and remove high-intensity work where appropriate. The coach
+                    will be told not to diagnose and to recommend professional assessment before progressing the affected area.
+                  </p>
+                )}
+
+                <div className="flex flex-col gap-2">
+                  <label className="text-sm text-main-text">Anything else your coach should know?</label>
+                  <p className="text-xs text-minor-text">
+                    Schedule conflicts, travel, how specific sessions felt, or any other context. This stays as free text for the AI coach.
+                  </p>
+                  <textarea
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    rows={5}
+                    className="w-full p-3 rounded-xl bg-panel text-main-text outline-none resize-none"
+                  />
+                </div>
               </>
             )}
 
@@ -527,7 +588,7 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
         {stage === 'prompt' && (
           <>
             <h3 className="font-display font-bold text-xl text-main-text">Copy this into your AI coach</h3>
-            <p className="text-sm text-minor-text">Open your favorite AI, paste this whole message, and send it.</p>
+            <p className="text-sm text-minor-text">Open your favorite AI, paste this whole message, and send it. Cadence has already locked the schedule; the AI is only filling in workout details.</p>
             <div className="max-h-64 overflow-y-auto p-2.5 rounded-xl bg-panel">
               <pre className="text-[11px] font-mono text-main-text whitespace-pre-wrap break-words">{prompt}</pre>
             </div>
@@ -586,6 +647,9 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
             </h3>
             {summary.skippedDuplicates > 0 && (
               <p className="text-sm text-minor-text">Skipped {summary.skippedDuplicates} already in your log.</p>
+            )}
+            {summary.validation && summary.validation.errors.length === 0 && (
+              <p className="text-sm text-accent">✓ Plan checked against the locked Cadence schedule</p>
             )}
             {(summary.warnings.length > 0 || summary.failedItems.length > 0) && (
               <>

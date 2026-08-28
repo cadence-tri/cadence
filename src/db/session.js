@@ -1,4 +1,4 @@
-import { toISODateString, asDate, startOfWeekMon, isSameDay as isSameDayUtil } from '../services/dateUtils'
+import { toISODateString, asDate, startOfWeekMon, isSameDay as isSameDayUtil } from '../services/dateUtils.js'
 
 // ---------------------------------------------------------------------
 // SessionSet helpers — ported from Models/SessionSet.swift

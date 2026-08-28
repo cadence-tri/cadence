@@ -1,4 +1,4 @@
-import { PROFILE_ID } from './db'
+import { PROFILE_ID } from './db.js'
 
 /** Default shape for a freshly created profile — mirrors
  * `AthleteProfile`'s Swift init defaults. `longSessionDays` is stored as a
@@ -24,8 +24,8 @@ export function newProfileDefaults(overrides = {}) {
     trainingDaysPerWeek: 5,
     longSessionDays: [],
     trainingBlockStartDate: null,
-    // Gym/strength preference — toggled from the Profile screen at any
-    // time (§ "Do not include gym sessions"). Purely a live switch: the
+    // Gym/strength preference — chosen during profile creation and editable
+    // from the Profile screen at any time. Purely a live switch: the
     // prompt builder reads it fresh on every generation, so flipping it
     // off simply means gym sessions resume in the *next* generated
     // block, no re-onboarding needed.
@@ -33,6 +33,10 @@ export function newProfileDefaults(overrides = {}) {
     // Only meaningful when excludeGymSessions is true — swaps "no S&C at
     // all" for "bodyweight-only S&C" in the generated prompt.
     bodyweightOnlyStrength: false,
+    // Whether the athlete has explicitly chosen their strength preference.
+    // New profiles set this during creation; legacy profiles can still answer
+    // the one-time onboarding question and become configured there.
+    strengthPreferenceConfigured: false,
     // One-time onboarding answers, collected the first time the athlete
     // builds a plan (empty-log "It starts here!" flow). Persisted on the
     // profile (not just used for the first prompt) so every subsequent

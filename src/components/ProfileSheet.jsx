@@ -184,7 +184,7 @@ export default function ProfileSheet({ profile, allSessions, onClose }) {
                 const excludeGymSessions = e.target.checked
                 // Turning gym back on makes the bodyweight-only choice
                 // moot — reset it so a stale preference doesn't linger.
-                patch({ excludeGymSessions, ...(excludeGymSessions ? {} : { bodyweightOnlyStrength: false }) })
+                patch({ excludeGymSessions, strengthPreferenceConfigured: true, ...(excludeGymSessions ? {} : { bodyweightOnlyStrength: false }) })
               }}
               className="w-5 h-5 accent-[var(--color-accent)] shrink-0"
             />
@@ -202,7 +202,7 @@ export default function ProfileSheet({ profile, allSessions, onClose }) {
                 <input
                   type="checkbox"
                   checked={!!local.bodyweightOnlyStrength}
-                  onChange={(e) => patch({ bodyweightOnlyStrength: e.target.checked })}
+                  onChange={(e) => patch({ bodyweightOnlyStrength: e.target.checked, strengthPreferenceConfigured: true })}
                   className="w-5 h-5 accent-[var(--color-accent)] shrink-0"
                 />
               </label>

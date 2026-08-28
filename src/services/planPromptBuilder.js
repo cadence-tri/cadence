@@ -4,8 +4,9 @@ import { setSummary } from '../db/session'
 import { phaseDisplayName } from '../db/phase'
 import { phaseForDate } from '../db/weekPhase'
 import { disciplineDisplayName } from '../db/discipline'
-import { addDays, asDate, startOfDay, weeksBetween } from './dateUtils'
+import { addDays, asDate, startOfDay, weeksBetween, parseImportDate } from './dateUtils'
 import { format } from 'date-fns'
+import { computeExperienceTier as computeExperienceTierShared } from './planning/planRules'
 
 /** Snaps `date` forward to the Monday on or after it (start-of-day). Every
  * 2-week block is Monday-to-Sunday, per PLAN_SCHEMA.md. */
@@ -210,48 +211,7 @@ export function gymRuleBullet(profile) {
  * only used to flag when a real log already exists, since §7.7 says log
  * evidence should lead once there's enough of it — this function doesn't
  * try to read fitness level out of the log itself, that's §7.3's job. */
-export function computeExperienceTier(profile, recentSessions = []) {
-  let beginnerPoints = 0
-  let advancedPoints = 0
-  const reasons = []
-  const isTri = profile.sport === 'triathlon'
-  const disciplinePriorExperience = isTri ? profile.onboardingTriPriorExperience : profile.onboardingAlreadyRuns
-
-  if (profile.onboardingPriorStructuredPlan === false) {
-    beginnerPoints++
-    reasons.push('never followed a structured training plan before')
-  } else if (profile.onboardingPriorStructuredPlan === true) {
-    advancedPoints++
-    reasons.push('has followed a structured training plan before')
-  }
-
-  if (profile.onboardingConsistencyRating === 'Not tested yet' || profile.onboardingConsistencyRating === 'I struggle with consistency') {
-    beginnerPoints++
-    reasons.push(`self-rated consistency: "${profile.onboardingConsistencyRating}"`)
-  } else if (profile.onboardingConsistencyRating === 'Very consistent') {
-    advancedPoints++
-    reasons.push('self-rated consistency: "Very consistent"')
-  }
-
-  if (disciplinePriorExperience === false) {
-    beginnerPoints++
-    reasons.push(isTri ? 'no prior triathlon completed' : 'new to running')
-  } else if (disciplinePriorExperience === true) {
-    advancedPoints++
-    reasons.push(isTri ? 'has completed triathlon(s) before' : 'already running before this plan')
-  }
-
-  const hasKnownNumbers = profile.onboardingKnowsThreshold === true || (profile.onboardingAlreadyRuns === true && !!profile.onboardingCurrentRacePace?.trim())
-  if (hasKnownNumbers) {
-    advancedPoints++
-    reasons.push('has known threshold/FTP or current race pace numbers')
-  }
-
-  const tier = beginnerPoints > advancedPoints ? 'Beginner' : advancedPoints > beginnerPoints ? 'Advanced' : 'Intermediate'
-  const hasSubstantialLog = recentSessions.length >= 15
-
-  return { tier, reasons, hasSubstantialLog }
-}
+export const computeExperienceTier = computeExperienceTierShared
 
 /** Renders the computed experience tier as a binding prompt line — see
  * §7.7. Falls back to Intermediate (the document's stated default) when
@@ -304,9 +264,9 @@ export function lifestyleRecoveryBiasLine(profile) {
 }
 
 
-/** A single self-contained block of text, ready to paste straight into a
- * Claude chat. Ported from `PlanPromptBuilder.buildCheckInPrompt`. */
-export function buildCheckInPrompt({ profile, recentSessions, weekPhases, athleteNote, capacityWarningText }) {
+/** A single self-contained block of text, ready to paste into the athlete's
+ * chosen AI coach. Ported from `PlanPromptBuilder.buildCheckInPrompt`. */
+export function buildCheckInPrompt({ profile, recentSessions, weekPhases, athleteNote, capacityWarningText, skeleton = null, checkIn = null }) {
   const schema = schemaText
   const isFirstPlan = recentSessions.length === 0
   const lastLoggedDate = isFirstPlan
@@ -338,8 +298,23 @@ export function buildCheckInPrompt({ profile, recentSessions, weekPhases, athlet
     const dayAfterLast = addDays(lastLoggedDate, 1)
     nextBlockStart = snappedToMonday(dayAfterLast)
   }
-  const blockEnd = addDays(nextBlockStart, 13)
-  const week1End = addDays(nextBlockStart, 6)
+  let blockEnd = addDays(nextBlockStart, 13)
+  let week1End = addDays(nextBlockStart, 6)
+
+  // In hybrid mode the deterministic scheduler owns the calendar. Do not
+  // independently recalculate dates here from the recent-session excerpt:
+  // the excerpt can legitimately end before the week's Sunday when the
+  // remaining days are rest. weekPhases/planHistory already let the
+  // scheduler advance from the last planned week boundary.
+  if (skeleton?.weeks?.length) {
+    const firstFullWeek = skeleton.weeks.find((week) => !week.partial) ?? skeleton.weeks[0]
+    const firstPartialWeek = skeleton.weeks.find((week) => week.partial) ?? null
+    nextBlockStart = parseImportDate(firstFullWeek.calendarStart ?? firstFullWeek.weekStart)
+    week1End = parseImportDate(firstFullWeek.calendarEnd) ?? addDays(nextBlockStart, 6)
+    blockEnd = parseImportDate(skeleton.blockEnd) ?? blockEnd
+    partialStart = firstPartialWeek ? parseImportDate(firstPartialWeek.calendarStart) : null
+    partialEnd = firstPartialWeek ? parseImportDate(firstPartialWeek.calendarEnd) : null
+  }
   const raceCalcAnchor = partialStart ?? nextBlockStart
 
   let raceLine = "No specific competition date is set on the athlete's profile."
@@ -368,13 +343,22 @@ export function buildCheckInPrompt({ profile, recentSessions, weekPhases, athlet
   const injuryLine = injuryAdaptationLine(profile)
   const lifestyleLine = lifestyleRecoveryBiasLine(profile)
 
-  const rangeBullet = partialStart
-    ? `- This is the athlete's very first plan and today (${abbrevDate(partialStart)}) falls mid-week, so ALSO generate an initial partial stretch of days from ${abbrevDate(partialStart)} through ${abbrevDate(partialEnd)} (that Sunday) — its own dedicated week header and \`\`\`session block, scaled appropriately as a lighter introductory few days — placed BEFORE the two standard Monday-to-Sunday weeks below. Then generate EXACTLY 2 full weeks, Monday through Sunday: week 1 runs ${abbrevDate(nextBlockStart)} (Monday) through ${abbrevDate(week1End)}, and week 2 runs through ${abbrevDate(blockEnd)} (Sunday). In total this reply covers ${abbrevDate(partialStart)} through ${abbrevDate(blockEnd)} — never more, never fewer.`
-    : `- Generate EXACTLY 2 weeks, Monday through Sunday: week 1 runs ${abbrevDate(nextBlockStart)} (Monday) through ${abbrevDate(week1End)}, and week 2 runs through ${abbrevDate(blockEnd)} (Sunday). Never more, never fewer, and always aligned to full Monday-to-Sunday weeks — even if the athlete's last logged session or check-in falls mid-week.`
+  const rangeBullet = skeleton?.weeks?.length
+    ? `- Generate EXACTLY these Cadence-numbered week sections and use these labels verbatim in BOTH the markdown headings and every JSON session's weekLabel: ${skeleton.weeks.map((week) => `${week.weekLabel} = ${abbrevDate(parseImportDate(week.calendarStart))} through ${abbrevDate(parseImportDate(week.calendarEnd))}${week.partial ? ' (partial introductory week)' : ''}`).join('; ')}. Do not restart, renumber, or infer week numbers from examples in the governance document. The locked Cadence weekLabel is authoritative.`
+    : partialStart
+      ? `- This is the athlete's very first plan and today (${abbrevDate(partialStart)}) falls mid-week, so ALSO generate an initial partial stretch of days from ${abbrevDate(partialStart)} through ${abbrevDate(partialEnd)} (that Sunday) — its own dedicated week header and session block, scaled appropriately as a lighter introductory few days — placed BEFORE the two standard Monday-to-Sunday weeks below. Then generate EXACTLY 2 full weeks, Monday through Sunday: week 1 runs ${abbrevDate(nextBlockStart)} (Monday) through ${abbrevDate(week1End)}, and week 2 runs through ${abbrevDate(blockEnd)} (Sunday). In total this reply covers ${abbrevDate(partialStart)} through ${abbrevDate(blockEnd)} — never more, never fewer.`
+      : `- Generate EXACTLY 2 weeks, Monday through Sunday: week 1 runs ${abbrevDate(nextBlockStart)} (Monday) through ${abbrevDate(week1End)}, and week 2 runs through ${abbrevDate(blockEnd)} (Sunday). Never more, never fewer, and always aligned to full Monday-to-Sunday weeks — even if the athlete's last logged session or check-in falls mid-week.`
 
   const openingLine = isFirstPlan
     ? "You are my coach building my very first training block, in the exact markdown+JSON format defined by the governance document below."
     : 'You are my coach generating the next 2-week block of my ongoing training plan, in the exact markdown+JSON format defined by the governance document below.'
+
+  const structuredCheckIn = checkIn && !isFirstPlan
+    ? `Structured check-in (binding scheduler inputs):\n- Recovery: ${checkIn.recovery || 'normal'}\n- Previous block load: ${checkIn.previousBlockLoad || 'aboutRight'}\n- Pain/injury concern: ${checkIn.painLevel || 'none'}${checkIn.painDetails?.trim() ? ` — ${checkIn.painDetails.trim()}` : ''}`
+    : ''
+  const skeletonText = skeleton
+    ? `\n\nCADENCE LOCKED SCHEDULE — THIS IS AUTHORITATIVE\nCadence has already solved the week numbers/labels, dates, disciplines, session roles, phases, and target totals. Do not reschedule, add, remove, or alter these locked fields. Your job is only to fill in workout composition (sets/reps/intervals/recoveries), coaching cues, and notes. Every JSON session MUST include the exact skeletonId below, a skeletonRole equal to the locked role, and weekLabel equal to the locked weekLabel so Cadence can validate and merge it. For brick sessions, also echo the exact brickTargets object from the locked schedule. For targetDistanceKm, write totalDistance in the schema's normal unit (swim = metres; all other disciplines = km). For brick sessions, use brickTargets to build the bike/run sets while keeping the brick itself on the locked date.\n\n${skeleton.weeks.map((week) => [`${week.weekLabel} — ${week.calendarStart} through ${week.calendarEnd} — phase ${week.phase}${week.partial ? ' (partial week)' : ''}`, ...week.sessions.map((session) => JSON.stringify(session))].join('\n')).join('\n\n')}`
+    : ''
 
   return `${openingLine} Follow it exactly: one \`\`\`session fenced block per week (or per partial stretch), valid JSON, phase names copied verbatim from its §3 list. This block ALSO governs how you size and pace this plan (§7) — my race distance, goal time, and weekly availability below aren't background color, they're binding targets for weekly volume, session distances, prescribed paces/power, day-by-day placement, and which disciplines appear at all.
 
@@ -382,15 +366,16 @@ ${schema}
 
 Additional rules for this generation:
 ${rangeBullet}
+- Week numbering is a locked Cadence field. The governance document's §1 skeleton is formatting guidance only; NEVER infer week numbers from examples or placeholders — use Cadence's locked weekLabel exactly.
 - Every prescribed session must be fully explicit: exact sets/reps/distances/paces/power/rest for swim/bike/run/brick, and exact exercises with specific weights for gym. No vague placeholders like "technique + aerobic set."
 - ${gymRule}
 - Base exercise selection and load progression on my own historical log below, not generic defaults.
-- Progress the phase sensibly (Build-Up → Endurance → Peak → Taper) based on weeks-to-race. The block just completed was: ${currentPhase}.
-- Size weekly volume and derive target paces/power from my race distance and goal time below, per §7 — not from generic defaults or from what the historical log happens to show, since the log may currently be running lighter or heavier than my actual target requires.
-- Fit the whole block into my actual weekly availability below (§7.5) — never schedule more training days than I have, even if the volume tables suggest more would be ideal; compress into fewer, longer, or combined (double-session/brick) days instead.
-- Place double sessions and the longest single sessions (long runs, long rides, bricks) on my higher-time days listed below, and keep the other training days shorter/lighter — per §7.5.
-- Respect the discipline scope below (§7.6) exactly — no swim/bike sessions for a running-only athlete, and at least one brick per week for a triathlete.
-- Apply the Experience tier line below exactly (§7.7) — it sets binding caps on weekly volume increase, minimum rest days, and quality-session frequency for this block; don't substitute your own judgment about the athlete's level.${injuryLine ? `\n- ${injuryLine}` : ''}${lifestyleLine ? `\n- ${lifestyleLine}` : ''}
+- Cadence has already chosen the phase in the locked schedule below. Do not re-phase or move sessions; use the previous phase (${currentPhase}) only as coaching context.
+- Cadence has already sized weekly volume in the locked schedule below. Use my race distance, goal, and log to elaborate appropriate paces/power and workout structure without changing the locked target totals.
+- Cadence has already fit the block to my weekly availability (§7.5). Do not add training dates or move sessions to different dates.
+- Cadence has already placed long/double sessions on higher-time days where applicable. Preserve those dates exactly.
+- Respect the locked discipline for every scheduled session; do not add extra disciplines or sessions.
+- The Experience tier below (§7.7) has already been applied to the schedule's volume/rest/quality caps. Use it for the level of coaching detail and exercise selection, but do not change the schedule shape.${injuryLine ? `\n- ${injuryLine}` : ''}${lifestyleLine ? `\n- ${lifestyleLine}` : ''}
 - Reply with ONLY the markdown for this block (week headers + prose + session blocks) — I'm going to copy your entire reply and paste it into an importer that extracts \`\`\`session blocks directly, so please skip any other preamble or closing remarks.
 
 Athlete: ${profile.name}, training for ${profile.sport === 'running' ? 'Running' : 'Triathlon'}.
@@ -407,7 +392,7 @@ ${athleteNote?.trim() ? athleteNote.trim() : '(none — just continue the plan a
 
 The block I just completed, as logged in the app (prescribed work, completion status, and any per-session feedback):
 
-${serializeSessions(recentSessions)}
+${serializeSessions(recentSessions)}${skeletonText}
 
 Please generate ${isFirstPlan ? 'this first block' : 'the next 2-week block'} now.`
 }

@@ -1,4 +1,4 @@
-import { asDate, startOfWeekMon, isSameDay, addWeeks } from '../services/dateUtils'
+import { asDate, startOfWeekMon, isSameDay, addWeeks } from '../services/dateUtils.js'
 
 /** Looks up the phase for whatever week `date` falls in. Missing row →
  * "maintenance", same default the native app uses. */

@@ -1,25 +1,24 @@
-import { db } from '../db/db'
-import { asDate, startOfWeekMon, startOfDay } from './dateUtils'
+import { db, PROFILE_ID } from '../db/db.js'
+import { asDate, startOfWeekMon, startOfDay } from './dateUtils.js'
+import { newProfileDefaults } from '../db/profile.js'
 
 // The file written by "Export backup" / read by "Import backup" — and,
-// since the shape is identical, also what a *native iOS app* backup
-// export produces (SessionBackupDTO/BackupFile in BackupService.swift use
-// the same field names and ISO-8601 dates). That means "import my
-// training history from the Swift app" is not a separate feature: it's
-// this exact Import Backup flow, pointed at a file exported from the
-// native app's Profile → Backup & Restore screen instead of one exported
-// from here.
-export const CURRENT_FORMAT_VERSION = 2
+// v1/v2 session/week-phase data is compatible with the native iOS backup
+// shape, so native exports remain importable here. PWA format v3 adds the
+// full profile as a backward-compatible superset; older native clients
+// should not be assumed to understand a v3 PWA export until updated.
+export const CURRENT_FORMAT_VERSION = 3
 
 export class BackupError extends Error {}
 
-/** Serializes every session and week-phase label into one backup object. */
+/** Serializes the complete athlete profile, every session, and week-phase label into one backup object. */
 export async function encodeBackup() {
-  const [sessions, weekPhases] = await Promise.all([db.sessions.toArray(), db.weekPhases.toArray()])
+  const [profile, sessions, weekPhases] = await Promise.all([db.profile.get(PROFILE_ID), db.sessions.toArray(), db.weekPhases.toArray()])
   return {
     formatVersion: CURRENT_FORMAT_VERSION,
     exportedAt: new Date().toISOString(),
     sessionCount: sessions.length,
+    profile: profile ? { ...profile, id: PROFILE_ID } : null,
     sessions: sessions.map((s) => ({
       date: asDate(s.date).toISOString(),
       discipline: s.discipline,
@@ -38,6 +37,22 @@ export async function encodeBackup() {
       phase: wp.phase,
     })),
   }
+}
+
+
+export function normalizeProfileLoose(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const defaults = newProfileDefaults()
+  const profile = { ...defaults, ...raw, id: PROFILE_ID }
+  profile.sport = profile.sport === 'running' ? 'running' : 'triathlon'
+  profile.trainingDaysPerWeek = Math.min(7, Math.max(1, Math.trunc(Number(profile.trainingDaysPerWeek) || defaults.trainingDaysPerWeek)))
+  profile.longSessionDays = Array.isArray(profile.longSessionDays)
+    ? [...new Set(profile.longSessionDays.map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= 7))]
+    : []
+  profile.excludeGymSessions = !!profile.excludeGymSessions
+  profile.bodyweightOnlyStrength = !!profile.bodyweightOnlyStrength
+  profile.strengthPreferenceConfigured = !!profile.strengthPreferenceConfigured
+  return profile
 }
 
 function normalizeDisciplineLoose(raw) {
@@ -90,14 +105,17 @@ export async function restoreBackup(fileText) {
     }
   })
 
+  const profileToRestore = normalizeProfileLoose(file.profile)
+
   const weekPhasesToInsert = (Array.isArray(file.weekPhases) ? file.weekPhases : []).map((dto) => ({
     weekStart: (asDate(dto.weekStart) ?? new Date()).toISOString(),
     phase: normalizePhaseLoose(dto.phase),
   }))
 
-  await db.transaction('rw', db.sessions, db.weekPhases, async () => {
+  await db.transaction('rw', db.profile, db.sessions, db.weekPhases, async () => {
     await db.sessions.clear()
     await db.weekPhases.clear()
+    if (profileToRestore) await db.profile.put(profileToRestore)
     if (sessionsToInsert.length) await db.sessions.bulkAdd(sessionsToInsert)
     if (weekPhasesToInsert.length) await db.weekPhases.bulkAdd(weekPhasesToInsert)
   })

@@ -19,6 +19,8 @@ export default function LoginScreen() {
   const [sport, setSport] = useState('triathlon')
   const [imageData, setImageData] = useState(null)
   const [hasCompetition, setHasCompetition] = useState(false)
+  const [excludeGymSessions, setExcludeGymSessions] = useState(false)
+  const [bodyweightOnlyStrength, setBodyweightOnlyStrength] = useState(false)
   const [competitionName, setCompetitionName] = useState('')
   const [competitionDate, setCompetitionDate] = useState(() => {
     const d = new Date()
@@ -54,6 +56,9 @@ export default function LoginScreen() {
       imageData,
       competitionName: hasCompetition ? competitionName.trim() : '',
       competitionDate: hasCompetition ? new Date(competitionDate).toISOString() : null,
+      excludeGymSessions,
+      bodyweightOnlyStrength: excludeGymSessions && bodyweightOnlyStrength,
+      strengthPreferenceConfigured: true,
       ...values,
       goalOverallTime: values.goalOverallTime.trim(),
       goalSwimTime: values.goalSwimTime.trim(),
@@ -110,6 +115,49 @@ export default function LoginScreen() {
         </div>
 
         <DistanceAndGoalSection sport={sport} values={values} onChange={onChange} />
+
+        <div className="flex flex-col gap-2">
+          <label className="flex items-center justify-between gap-3">
+            <span className="text-sm text-main-text">Do not include gym sessions in my training plan</span>
+            <input
+              type="checkbox"
+              checked={excludeGymSessions}
+              onChange={(e) => {
+                const excluded = e.target.checked
+                setExcludeGymSessions(excluded)
+                if (!excluded) setBodyweightOnlyStrength(false)
+              }}
+              className="w-5 h-5 accent-[var(--color-accent)] shrink-0"
+            />
+          </label>
+          <p className="text-xs text-minor-text">
+            {excludeGymSessions
+              ? 'Your generated plan won\u2019t include gym sessions unless you choose bodyweight exercises below.'
+              : 'Turn this on if you only want to use Cadence for running/triathlon training, without gym work.'}
+          </p>
+
+          {excludeGymSessions && (
+            <>
+              <label className="flex items-center justify-between gap-3 pl-3 mt-1">
+                <span className="text-sm text-main-text">Include bodyweight exercises in my training plan</span>
+                <input
+                  type="checkbox"
+                  checked={bodyweightOnlyStrength}
+                  onChange={(e) => setBodyweightOnlyStrength(e.target.checked)}
+                  className="w-5 h-5 accent-[var(--color-accent)] shrink-0"
+                />
+              </label>
+              {!bodyweightOnlyStrength && (
+                <div className="ml-3 p-3 rounded-xl bg-red-500/10">
+                  <p className="text-xs text-red-600">
+                    Your training plan won&apos;t include any strength exercise to support your{' '}
+                    {sport === 'triathlon' ? 'triathlon' : 'running'} training. Are you sure you want to continue?
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+        </div>
 
         <div className="flex flex-col gap-2">
           <label className="flex items-center justify-between">

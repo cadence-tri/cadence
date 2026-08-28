@@ -1,8 +1,9 @@
-import { db } from '../db/db'
-import { normalizeDiscipline } from '../db/discipline'
-import { parsePhase } from '../db/phase'
-import { newSet, makeImportKey } from '../db/session'
-import { parseImportDate, startOfWeekMon, toISODateString } from './dateUtils'
+import { db } from '../db/db.js'
+import { normalizeDiscipline } from '../db/discipline.js'
+import { parsePhase } from '../db/phase.js'
+import { newSet, makeImportKey } from '../db/session.js'
+import { parseImportDate, startOfWeekMon, toISODateString } from './dateUtils.js'
+import { validateGeneratedPlan, mergeGeneratedWithSkeleton } from './planning/planValidator.js'
 
 /** Extracts every ```session ... ``` fenced block from markdown text. Falls
  * back to scanning for bare (unfenced) JSON when no fences are found — see
@@ -166,6 +167,7 @@ export function parseMarkdown(markdown, existingSessions, existingWeekPhases) {
   )
 
   const newSessions = []
+  const decodedSessions = []
   const newWeekPhases = []
 
   for (const block of blocks) {
@@ -213,6 +215,9 @@ export function parseMarkdown(markdown, existingSessions, existingWeekPhases) {
         typeof rawItem.isOptional === 'boolean' ? rawItem.isOptional : inferOptional(title, notes)
       const totalDistance = toNumberOrNull(rawItem.totalDistance)
       const weekLabel = toStringOrNull(rawItem.weekLabel)
+      const skeletonId = toStringOrNull(rawItem.skeletonId)
+      const skeletonRole = toStringOrNull(rawItem.skeletonRole)
+      const brickTargets = rawItem.brickTargets && typeof rawItem.brickTargets === 'object' ? rawItem.brickTargets : null
 
       const session = {
         date: date.toISOString(),
@@ -227,7 +232,12 @@ export function parseMarkdown(markdown, existingSessions, existingWeekPhases) {
         isOptional,
         totalDistance,
         importKey: makeImportKey(date, discipline ?? 'other', title),
+        ...(skeletonId ? { skeletonId } : {}),
+        ...(skeletonRole ? { skeletonRole } : {}),
+        ...(brickTargets ? { brickTargets } : {}),
       }
+
+      decodedSessions.push(session)
 
       // Week-phase, first-write-wins.
       if (rawItem.phase) {
@@ -255,17 +265,39 @@ export function parseMarkdown(markdown, existingSessions, existingWeekPhases) {
     }
   }
 
-  return { newSessions, newWeekPhases, summary }
+  return { newSessions, decodedSessions, newWeekPhases, summary }
 }
 
 /** Imports markdown text into the live database — reads the current log,
  * parses, then writes the result in one transaction. */
-export async function importMarkdown(markdown) {
+export async function importMarkdown(markdown, options = {}) {
   const [existingSessions, existingWeekPhases] = await Promise.all([
     db.sessions.toArray(),
     db.weekPhases.toArray(),
   ])
-  const { newSessions, newWeekPhases, summary } = parseMarkdown(markdown, existingSessions, existingWeekPhases)
+  let { newSessions, decodedSessions, newWeekPhases, summary } = parseMarkdown(markdown, existingSessions, existingWeekPhases)
+
+  if (options.skeleton) {
+    const validation = validateGeneratedPlan({ skeleton: options.skeleton, sessions: decodedSessions })
+    if (validation.errors.length) {
+      const error = new Error(`Cadence found problems in the generated plan:\n${validation.errors.map((x) => `• ${x}`).join('\n')}`)
+      error.validation = validation
+      throw error
+    }
+    newSessions = mergeGeneratedWithSkeleton({ skeleton: options.skeleton, sessions: newSessions }).map((session) => {
+      const { skeletonId: _validatedSkeletonId, skeletonRole: _validatedSkeletonRole, brickTargets: _validatedBrickTargets, ...storedSession } = session
+      return {
+        ...storedSession,
+        importKey: makeImportKey(storedSession.date, storedSession.discipline, storedSession.title),
+      }
+    })
+    const phases = new Map()
+    for (const week of options.skeleton.weeks ?? []) {
+      phases.set(week.weekStart, { weekStart: new Date(`${week.weekStart}T00:00:00`).toISOString(), phase: week.phase })
+    }
+    newWeekPhases = [...phases.values()].filter((wp) => !existingWeekPhases.some((existing) => toISODateString(startOfWeekMon(new Date(existing.weekStart))) === wp.weekStart.slice(0, 10)))
+    summary.validation = validation
+  }
 
   await db.transaction('rw', db.sessions, db.weekPhases, async () => {
     if (newSessions.length) await db.sessions.bulkAdd(newSessions)

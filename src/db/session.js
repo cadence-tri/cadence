@@ -110,10 +110,34 @@ export function countsTowardStats(session) {
 }
 
 /** `totalDistance` normalized to km regardless of discipline (swim's
- * meters divided by 1000). */
+ * meters divided by 1000). This is the static, import-time (or manual-
+ * entry-time) total — it does NOT reflect later edits to individual
+ * sets' `distanceM`. Used only as a fallback by `derivedDistanceKm` below
+ * for sessions that don't break distance down per-set. */
 export function totalDistanceKm(session) {
   if (session.totalDistance == null) return null
   return session.discipline === 'swim' ? session.totalDistance / 1000 : session.totalDistance
+}
+
+/** The distance that actually counts for Stats — summed from completed
+ * sets' `distanceM` (× `setsCount` for repeated segments, e.g. 4×150m
+ * strides) whenever the session breaks distance down per-set, so editing
+ * a set's distance/pace in the session-detail view is immediately
+ * reflected here. Skipped sets contribute nothing, matching how skipped
+ * items are already excluded from duration/weight stats. Falls back to
+ * the static `totalDistance` field only when the session has no
+ * distance-bearing sets at all (e.g. a manual entry logged as one
+ * lump total, or a session described purely by duration/pace). */
+export function derivedDistanceKm(session) {
+  const sets = session.sets ?? []
+  const distanceBearingSets = sets.filter((s) => s.distanceM != null)
+  if (distanceBearingSets.length > 0) {
+    const meters = distanceBearingSets
+      .filter((s) => s.isCompleted)
+      .reduce((sum, s) => sum + s.distanceM * (s.setsCount ?? 1), 0)
+    return meters / 1000
+  }
+  return totalDistanceKm(session)
 }
 
 /** Bulk-marks every set done/undone — the "tap the ring" shortcut. Always

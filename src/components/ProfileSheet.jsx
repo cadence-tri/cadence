@@ -175,6 +175,52 @@ export default function ProfileSheet({ profile, allSessions, onClose }) {
         )}
 
         <div className="flex flex-col gap-2">
+          <label className="flex items-center justify-between gap-3">
+            <span className="text-sm text-main-text">Do not include gym sessions in my training plan</span>
+            <input
+              type="checkbox"
+              checked={!!local.excludeGymSessions}
+              onChange={(e) => {
+                const excludeGymSessions = e.target.checked
+                // Turning gym back on makes the bodyweight-only choice
+                // moot — reset it so a stale preference doesn't linger.
+                patch({ excludeGymSessions, ...(excludeGymSessions ? {} : { bodyweightOnlyStrength: false }) })
+              }}
+              className="w-5 h-5 accent-[var(--color-accent)] shrink-0"
+            />
+          </label>
+          <p className="text-xs text-minor-text">
+            {local.excludeGymSessions
+              ? 'Your next generated plan won\u2019t include gym sessions. Turn this off any time to bring them back into future weeks.'
+              : 'Turn this on if you only want to use Cadence for running/triathlon training, without gym work.'}
+          </p>
+
+          {local.excludeGymSessions && (
+            <>
+              <label className="flex items-center justify-between gap-3 pl-3 mt-1">
+                <span className="text-sm text-main-text">Include bodyweight exercises in my training plan</span>
+                <input
+                  type="checkbox"
+                  checked={!!local.bodyweightOnlyStrength}
+                  onChange={(e) => patch({ bodyweightOnlyStrength: e.target.checked })}
+                  className="w-5 h-5 accent-[var(--color-accent)] shrink-0"
+                />
+              </label>
+
+              {!local.bodyweightOnlyStrength && (
+                <div className="ml-3 p-3 rounded-xl bg-red-500/10 flex flex-col gap-1">
+                  <p className="text-xs text-red-600">
+                    Your current training plan won&apos;t include any strength exercise to support your{' '}
+                    {local.sport === 'triathlon' ? 'triathlon' : 'running'} training. Are you sure you want to
+                    continue?
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-2">
           <label className="flex items-center justify-between">
             <span className="text-sm text-main-text">Training for a specific competition</span>
             <input

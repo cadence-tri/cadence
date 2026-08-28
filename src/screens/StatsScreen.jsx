@@ -6,7 +6,7 @@ import { db } from '../db/db'
 import { DISCIPLINES, disciplineDisplayName, disciplineColor } from '../db/discipline'
 import { PHASES, phaseDisplayName, phaseColor } from '../db/phase'
 import { phaseForDate } from '../db/weekPhase'
-import { countsTowardStats, isFullyCompleted, totalDistanceKm, durationMinutes } from '../db/session'
+import { countsTowardStats, isFullyCompleted, derivedDistanceKm, durationMinutes } from '../db/session'
 import { asDate, startOfWeekMon } from '../services/dateUtils'
 import { format } from 'date-fns'
 
@@ -27,7 +27,7 @@ function weeklyBuckets(sessions, keyFn) {
 function DisciplinePanel({ discipline, sessions }) {
   const distancePoints = weeklyBuckets(
     sessions.filter((s) => s.discipline === discipline && countsTowardStats(s) && isFullyCompleted(s)),
-    (s) => totalDistanceKm(s)
+    (s) => derivedDistanceKm(s)
   )
   const hasDistance = distancePoints.some((p) => p.value > 0)
   const points = hasDistance

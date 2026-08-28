@@ -94,6 +94,216 @@ export function disciplineLine(profile) {
   return 'Discipline scope: full triathlon (swim, bike, run). Include at least one brick session per week per §7.6, plus gym/strength & conditioning and rest days.'
 }
 
+/** Renders the athlete's onboarding answers (injury history, running/tri
+ * background, gym preference, freeform notes) as prompt lines. Read from
+ * the profile — not from wizard-local state — so this context survives
+ * and keeps informing every future 2-week generation, not just the very
+ * first one. Any unanswered question is simply omitted rather than
+ * printed as a blank/placeholder line. */
+export function athleteBackgroundLines(profile) {
+  const lines = []
+
+  if (profile.onboardingInjury?.trim()) {
+    lines.push(`Injury history: ${profile.onboardingInjury.trim()}.`)
+  } else if (profile.onboardingCompleted) {
+    lines.push('Injury history: none reported.')
+  }
+
+  if (profile.onboardingAlreadyRuns === true) {
+    const pace = profile.onboardingCurrentRacePace?.trim()
+    lines.push(`Already running before starting this plan${pace ? `, current race pace: ${pace}` : ' (no current race pace given)'}.`)
+  } else if (profile.onboardingAlreadyRuns === false) {
+    lines.push('New to running — build up run volume/intensity conservatively rather than assuming an existing base.')
+  }
+
+  if (profile.sport === 'triathlon') {
+    if (profile.onboardingTriPriorExperience === true) {
+      lines.push(`Has completed triathlon(s) before: ${profile.onboardingTriExperienceDetails?.trim() || '(no further details given)'}.`)
+    } else if (profile.onboardingTriPriorExperience === false) {
+      const parts = []
+      if (profile.onboardingSwimFitness?.trim()) parts.push(`swim — ${profile.onboardingSwimFitness.trim()}`)
+      if (profile.onboardingBikeFitness?.trim()) parts.push(`bike — ${profile.onboardingBikeFitness.trim()}`)
+      if (profile.onboardingRunFitness?.trim()) parts.push(`run — ${profile.onboardingRunFitness.trim()}`)
+      lines.push(`This will be their first triathlon. Self-assessed current fitness: ${parts.length ? parts.join('; ') : 'not specified'}.`)
+    }
+  }
+
+  // Physiology baseline
+  const physiologyParts = []
+  if (profile.onboardingAge?.trim()) physiologyParts.push(`age ${profile.onboardingAge.trim()}`)
+  if (profile.onboardingWeightKg?.trim()) physiologyParts.push(`body weight ${profile.onboardingWeightKg.trim()}kg`)
+  if (physiologyParts.length) lines.push(`Physiology: ${physiologyParts.join(', ')}.`)
+
+  if (profile.onboardingKnowsHeartRate === true) {
+    const resting = profile.onboardingRestingHR?.trim()
+    const max = profile.onboardingMaxHR?.trim()
+    const hrParts = []
+    if (resting) hrParts.push(`resting HR ${resting}bpm`)
+    if (max) hrParts.push(`max HR ${max}bpm`)
+    lines.push(`Heart rate: ${hrParts.length ? hrParts.join(', ') : 'known but not specified'} — anchor Z2/Z3 zones off this rather than pace-only estimates where useful.`)
+  }
+
+  if (profile.onboardingKnowsThreshold === true && profile.onboardingThresholdDetails?.trim()) {
+    lines.push(`Known threshold numbers: ${profile.onboardingThresholdDetails.trim()} — use this to anchor threshold/FTP-based prescriptions instead of estimating from goal time alone.`)
+  }
+
+  // Equipment & access
+  if (profile.sport === 'triathlon') {
+    if (profile.onboardingBikeSetup?.trim()) {
+      lines.push(`Bike training setup: ${profile.onboardingBikeSetup.trim()}${profile.onboardingBikeSetup.includes('power meter') ? ' — power-based prescriptions are usable.' : ' — avoid prescribing power targets that need a meter they don\u2019t have.'}`)
+    }
+    const poolDays = profile.onboardingPoolDaysPerWeek?.trim()
+    if (poolDays) {
+      lines.push(`Pool access: about ${poolDays} day(s)/week${profile.onboardingOpenWaterAccess === true ? ', plus open water access in season' : profile.onboardingOpenWaterAccess === false ? ', no open water access' : ''}.`)
+    }
+  }
+
+  if (profile.onboardingTerrain?.trim()) {
+    lines.push(`Typical training terrain: ${profile.onboardingTerrain.trim()}${profile.onboardingTreadmillAccess === true ? ', with treadmill access for bad weather' : ''}.`)
+  }
+
+  // Lifestyle
+  const lifestyleParts = []
+  if (profile.onboardingJobType?.trim()) lifestyleParts.push(`job: ${profile.onboardingJobType.trim()}`)
+  if (profile.onboardingSleepHours?.trim()) lifestyleParts.push(`typical sleep: ~${profile.onboardingSleepHours.trim()}h/night`)
+  if (profile.onboardingPreferredTrainingTime?.trim()) lifestyleParts.push(`prefers training in the ${profile.onboardingPreferredTrainingTime.trim().toLowerCase()}`)
+  if (lifestyleParts.length) lines.push(`Lifestyle: ${lifestyleParts.join('; ')} — factor this into recovery expectations and session placement.`)
+
+  // Ongoing medical (distinct from past injury history above)
+  if (profile.onboardingOngoingConditions === true && profile.onboardingOngoingConditionsDetails?.trim()) {
+    lines.push(`Ongoing condition(s) to actively manage: ${profile.onboardingOngoingConditionsDetails.trim()}.`)
+  }
+
+  // Experience & adherence
+  const experienceParts = []
+  if (profile.onboardingPriorStructuredPlan === true) experienceParts.push('has followed a structured training plan before')
+  else if (profile.onboardingPriorStructuredPlan === false) experienceParts.push('has never followed a structured training plan before — keep early instructions extra clear')
+  if (profile.onboardingConsistencyRating?.trim()) experienceParts.push(`self-rated consistency: ${profile.onboardingConsistencyRating.trim()}`)
+  if (experienceParts.length) lines.push(`Training experience: ${experienceParts.join('; ')}.`)
+
+  if (profile.onboardingAdditionalInfo?.trim()) {
+    lines.push(`Additional context from the athlete: ${profile.onboardingAdditionalInfo.trim()}.`)
+  }
+
+  return lines
+}
+
+/** The gym/S&C rule bullet — overrides the normal "always include S&C"
+ * default when the athlete has opted out (Profile toggle or onboarding
+ * question), and swaps in "bodyweight-only" phrasing when that's their
+ * stated preference. */
+export function gymRuleBullet(profile) {
+  if (!profile.excludeGymSessions) {
+    return 'Every week includes at least one clear rest day, some mobility/stretching, and strength & conditioning worked in on my existing gym pattern — even for a running-only plan, per §7.6, S&C still stays in.'
+  }
+  if (profile.bodyweightOnlyStrength) {
+    return 'Every week includes at least one clear rest day and some mobility/stretching. The athlete has opted out of gym/weighted strength training — replace it entirely with bodyweight-only strength & conditioning (no equipment, or minimal/home equipment) in every week of the plan; never schedule a weighted gym session.'
+  }
+  return 'Every week includes at least one clear rest day and some mobility/stretching. The athlete has opted out of gym/strength training entirely — do NOT include any gym or strength & conditioning sessions anywhere in this plan, for any week.'
+}
+
+/** Computes a deterministic Beginner/Intermediate/Advanced tier from
+ * onboarding signals (§7.7 in PLAN_SCHEMA.md). Computed here — once, by
+ * the app — rather than left for whatever AI model reads the prompt to
+ * guess at, so the tier stays stable across different tools/models
+ * generating different blocks for the same athlete. `recentSessions` is
+ * only used to flag when a real log already exists, since §7.7 says log
+ * evidence should lead once there's enough of it — this function doesn't
+ * try to read fitness level out of the log itself, that's §7.3's job. */
+export function computeExperienceTier(profile, recentSessions = []) {
+  let beginnerPoints = 0
+  let advancedPoints = 0
+  const reasons = []
+  const isTri = profile.sport === 'triathlon'
+  const disciplinePriorExperience = isTri ? profile.onboardingTriPriorExperience : profile.onboardingAlreadyRuns
+
+  if (profile.onboardingPriorStructuredPlan === false) {
+    beginnerPoints++
+    reasons.push('never followed a structured training plan before')
+  } else if (profile.onboardingPriorStructuredPlan === true) {
+    advancedPoints++
+    reasons.push('has followed a structured training plan before')
+  }
+
+  if (profile.onboardingConsistencyRating === 'Not tested yet' || profile.onboardingConsistencyRating === 'I struggle with consistency') {
+    beginnerPoints++
+    reasons.push(`self-rated consistency: "${profile.onboardingConsistencyRating}"`)
+  } else if (profile.onboardingConsistencyRating === 'Very consistent') {
+    advancedPoints++
+    reasons.push('self-rated consistency: "Very consistent"')
+  }
+
+  if (disciplinePriorExperience === false) {
+    beginnerPoints++
+    reasons.push(isTri ? 'no prior triathlon completed' : 'new to running')
+  } else if (disciplinePriorExperience === true) {
+    advancedPoints++
+    reasons.push(isTri ? 'has completed triathlon(s) before' : 'already running before this plan')
+  }
+
+  const hasKnownNumbers = profile.onboardingKnowsThreshold === true || (profile.onboardingAlreadyRuns === true && !!profile.onboardingCurrentRacePace?.trim())
+  if (hasKnownNumbers) {
+    advancedPoints++
+    reasons.push('has known threshold/FTP or current race pace numbers')
+  }
+
+  const tier = beginnerPoints > advancedPoints ? 'Beginner' : advancedPoints > beginnerPoints ? 'Advanced' : 'Intermediate'
+  const hasSubstantialLog = recentSessions.length >= 15
+
+  return { tier, reasons, hasSubstantialLog }
+}
+
+/** Renders the computed experience tier as a binding prompt line — see
+ * §7.7. Falls back to Intermediate (the document's stated default) when
+ * onboarding hasn't been completed yet, since there's nothing to derive
+ * a tier from. */
+export function experienceTierLine(profile, recentSessions) {
+  if (!profile.onboardingCompleted) {
+    return "Experience tier: Intermediate (per §7.7's default — onboarding wasn't completed, so there are no self-reported signals to derive a tier from). Apply §7.7's Intermediate modifiers."
+  }
+  const { tier, reasons, hasSubstantialLog } = computeExperienceTier(profile, recentSessions)
+  const reasonText = reasons.length ? ` Based on: ${reasons.join('; ')}.` : ' No strong signals either way — defaulting to Intermediate.'
+  const logNote = hasSubstantialLog
+    ? " A meaningful training log already exists — per §7.7, let demonstrated capacity (§7.3) lead over this tier where the two disagree."
+    : ''
+  return `Experience tier: ${tier} (per §7.7).${reasonText} Apply §7.7's ${tier} modifiers (weekly increase cap, rest-day minimum, quality-session cap, cueing detail) to this block.${logNote}`
+}
+
+/** Binding injury/ongoing-condition adaptation instruction — see §7.8.
+ * Returns null (omit entirely) when nothing was reported, so the prompt
+ * doesn't carry a hollow "no adaptation needed" line for every athlete. */
+export function injuryAdaptationLine(profile) {
+  const hasPastInjury = !!profile.onboardingInjury?.trim()
+  const hasOngoing = profile.onboardingOngoingConditions === true && !!profile.onboardingOngoingConditionsDetails?.trim()
+  if (!hasPastInjury && !hasOngoing) return null
+  const parts = []
+  if (hasPastInjury) parts.push(`past injury noted: ${profile.onboardingInjury.trim()}`)
+  if (hasOngoing) parts.push(`ongoing condition to actively manage: ${profile.onboardingOngoingConditionsDetails.trim()}`)
+  return `Injury/condition adaptation required (§7.8) — ${parts.join('; ')}. This is binding, not just background: bias progression conservatively around the affected area/discipline, avoid movements that plausibly aggravate an ongoing condition, and state in this block's Notes what was avoided or adjusted and why.`
+}
+
+/** Binding lifestyle recovery bias — see §7.9. Returns null (omit) only
+ * when neither job type nor sleep hours were reported at all; otherwise
+ * always states the applicable bias (including the explicit "no bias
+ * needed" case), since that's still useful confirmation for the coach. */
+export function lifestyleRecoveryBiasLine(profile) {
+  const jobType = profile.onboardingJobType?.trim()
+  const sleepHours = parseFloat(profile.onboardingSleepHours)
+  if (!jobType && Number.isNaN(sleepHours)) return null
+
+  const physicallyDemanding = jobType === 'Physically active job'
+  const lowSleep = !Number.isNaN(sleepHours) && sleepHours < 6.5
+
+  if (physicallyDemanding || lowSleep) {
+    const reasons = []
+    if (physicallyDemanding) reasons.push('physically active job')
+    if (lowSleep) reasons.push(`reported sleep ~${profile.onboardingSleepHours.trim()}h/night`)
+    return `Lifestyle recovery bias (§7.9): ${reasons.join(', ')} — bias toward the lower half of §7.1's volume range this block, and avoid stacking a hard training day on top of a demanding work day where the schedule suggests that's a regular pattern.`
+  }
+  return "Lifestyle recovery bias (§7.9): no adjustment needed — reported job type/sleep look typical, use the tier-appropriate default within §7.1's range."
+}
+
+
 /** A single self-contained block of text, ready to paste straight into a
  * Claude chat. Ported from `PlanPromptBuilder.buildCheckInPrompt`. */
 export function buildCheckInPrompt({ profile, recentSessions, weekPhases, athleteNote, capacityWarningText }) {
@@ -152,6 +362,11 @@ export function buildCheckInPrompt({ profile, recentSessions, weekPhases, athlet
   const availability = availabilityLine(profile, capacityWarningText)
   const longSessions = longSessionDatesLine(profile, nextBlockStart)
   const scope = disciplineLine(profile)
+  const background = athleteBackgroundLines(profile)
+  const gymRule = gymRuleBullet(profile)
+  const tierLine = experienceTierLine(profile, recentSessions)
+  const injuryLine = injuryAdaptationLine(profile)
+  const lifestyleLine = lifestyleRecoveryBiasLine(profile)
 
   const rangeBullet = partialStart
     ? `- This is the athlete's very first plan and today (${abbrevDate(partialStart)}) falls mid-week, so ALSO generate an initial partial stretch of days from ${abbrevDate(partialStart)} through ${abbrevDate(partialEnd)} (that Sunday) — its own dedicated week header and \`\`\`session block, scaled appropriately as a lighter introductory few days — placed BEFORE the two standard Monday-to-Sunday weeks below. Then generate EXACTLY 2 full weeks, Monday through Sunday: week 1 runs ${abbrevDate(nextBlockStart)} (Monday) through ${abbrevDate(week1End)}, and week 2 runs through ${abbrevDate(blockEnd)} (Sunday). In total this reply covers ${abbrevDate(partialStart)} through ${abbrevDate(blockEnd)} — never more, never fewer.`
@@ -168,13 +383,14 @@ ${schema}
 Additional rules for this generation:
 ${rangeBullet}
 - Every prescribed session must be fully explicit: exact sets/reps/distances/paces/power/rest for swim/bike/run/brick, and exact exercises with specific weights for gym. No vague placeholders like "technique + aerobic set."
-- Every week includes at least one clear rest day, some mobility/stretching, and strength & conditioning worked in on my existing gym pattern — even for a running-only plan, per §7.6, S&C still stays in.
+- ${gymRule}
 - Base exercise selection and load progression on my own historical log below, not generic defaults.
 - Progress the phase sensibly (Build-Up → Endurance → Peak → Taper) based on weeks-to-race. The block just completed was: ${currentPhase}.
 - Size weekly volume and derive target paces/power from my race distance and goal time below, per §7 — not from generic defaults or from what the historical log happens to show, since the log may currently be running lighter or heavier than my actual target requires.
 - Fit the whole block into my actual weekly availability below (§7.5) — never schedule more training days than I have, even if the volume tables suggest more would be ideal; compress into fewer, longer, or combined (double-session/brick) days instead.
 - Place double sessions and the longest single sessions (long runs, long rides, bricks) on my higher-time days listed below, and keep the other training days shorter/lighter — per §7.5.
 - Respect the discipline scope below (§7.6) exactly — no swim/bike sessions for a running-only athlete, and at least one brick per week for a triathlete.
+- Apply the Experience tier line below exactly (§7.7) — it sets binding caps on weekly volume increase, minimum rest days, and quality-session frequency for this block; don't substitute your own judgment about the athlete's level.${injuryLine ? `\n- ${injuryLine}` : ''}${lifestyleLine ? `\n- ${lifestyleLine}` : ''}
 - Reply with ONLY the markdown for this block (week headers + prose + session blocks) — I'm going to copy your entire reply and paste it into an importer that extracts \`\`\`session blocks directly, so please skip any other preamble or closing remarks.
 
 Athlete: ${profile.name}, training for ${profile.sport === 'running' ? 'Running' : 'Triathlon'}.
@@ -183,6 +399,8 @@ ${target}
 ${availability}
 ${longSessions}
 ${scope}
+${tierLine}
+${background.length ? `\nAthlete background (from onboarding — keep applying this to every block, not just the first):\n${background.join('\n')}` : ''}
 
 My check-in note for this block:
 ${athleteNote?.trim() ? athleteNote.trim() : '(none — just continue the plan as progressed)'}

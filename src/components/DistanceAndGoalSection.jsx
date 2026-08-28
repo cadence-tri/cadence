@@ -89,7 +89,7 @@ export default function DistanceAndGoalSection({ sport, values, onChange }) {
 
       <div className="pt-2">
         <div className="flex items-center justify-between">
-          <span className="text-main-text text-sm">Training days per week</span>
+          <span className="text-main-text text-sm">How many days a week can you train?</span>
           <div className="flex items-center gap-3">
             <button
               onClick={() => onChange('trainingDaysPerWeek', Math.max(1, values.trainingDaysPerWeek - 1))}
@@ -107,13 +107,19 @@ export default function DistanceAndGoalSection({ sport, values, onChange }) {
           </div>
         </div>
         <p className="text-[11px] text-minor-text mt-1">
-          How many days you can train — you can still fit two sessions into a day (e.g. run + gym, swim + gym, or a
-          brick), especially on the longer-time days below.
+          Pick below the days where you have time for longer or double sessions.
         </p>
       </div>
 
       <div className="pt-2">
-        <label className="text-xs text-minor-text">Which days do you have more time?</label>
+        <span className="text-main-text text-sm">Which days do you have more time?</span>
+        <div className="flex items-start gap-1.5 mt-1.5">
+          <AlertTriangle size={14} className="text-accent shrink-0 mt-0.5" />
+          <p className="text-xs text-minor-text">
+            Your coach will schedule in these days double sessions or longer ones (a long run, a long ride, a
+            brick).
+          </p>
+        </div>
         <div className="flex gap-1.5 mt-2">
           {WEEKDAYS_MON_FIRST.map((day) => {
             const isOn = (values.longSessionDays ?? []).includes(day.value)
@@ -130,10 +136,6 @@ export default function DistanceAndGoalSection({ sport, values, onChange }) {
             )
           })}
         </div>
-        <p className="text-[11px] text-minor-text mt-1.5">
-          Your coach can schedule double sessions or longer ones (a long run, a long ride, a brick) on these days,
-          and keep the rest lighter.
-        </p>
       </div>
 
       {warning && !warningDismissed && (

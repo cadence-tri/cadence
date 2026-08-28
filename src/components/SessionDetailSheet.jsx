@@ -5,7 +5,8 @@ import Sheet from './Sheet'
 import CompletionRing from './CompletionRing'
 import { OptionalBadge } from './SessionRow'
 import { disciplineIcon, disciplineColor, disciplineDisplayName } from '../db/discipline'
-import { completionFraction, addressedSetCount, setSummary } from '../db/session'
+import { completionFraction, addressedSetCount, setSummary, makeImportKey } from '../db/session'
+import { startOfWeekMon, addDays, asDate, isSameDay } from '../services/dateUtils'
 import { db } from '../db/db'
 
 function SkippedBadge() {
@@ -16,8 +17,13 @@ function SkippedBadge() {
   )
 }
 
+/** Editable form for one prescribed item. Field set depends on
+ * discipline: gym gets sets/reps/weight, everything else (swim/bike/run/
+ * brick) gets sets/distance/duration/pace-power/rest — those endurance
+ * fields previously had no editable inputs at all, so a run's distance
+ * or pace could never actually be changed from this screen. */
 function EditableSetRow({ set, discipline, onChange }) {
-  const showsWeight = discipline === 'gym' || set.weightKg != null
+  const isGym = discipline === 'gym'
 
   const numField = (key, label, width = 60) => (
     <div className="flex flex-col gap-0.5">
@@ -32,13 +38,39 @@ function EditableSetRow({ set, discipline, onChange }) {
     </div>
   )
 
+  const textField = (key, label, placeholder, width = 96) => (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[10px] text-minor-text">{label}</span>
+      <input
+        type="text"
+        value={set[key] ?? ''}
+        placeholder={placeholder}
+        onChange={(e) => onChange({ ...set, [key]: e.target.value === '' ? null : e.target.value })}
+        style={{ width }}
+        className="border border-minor-text/30 rounded px-1.5 py-1 text-sm text-main-text placeholder:text-minor-text/50"
+      />
+    </div>
+  )
+
   return (
-    <div className="py-1.5">
-      <div className="text-sm font-semibold text-main-text mb-1">{set.exercise || 'Item'}</div>
-      <div className="flex gap-4">
-        {numField('setsCount', 'sets')}
-        {numField('reps', 'reps')}
-        {showsWeight && numField('weightKg', 'kg')}
+    <div className="py-2.5">
+      <div className="text-sm font-semibold text-main-text mb-1.5">{set.exercise || 'Item'}</div>
+      <div className="flex gap-3 flex-wrap">
+        {isGym ? (
+          <>
+            {numField('setsCount', 'sets')}
+            {numField('reps', 'reps')}
+            {numField('weightKg', 'kg')}
+          </>
+        ) : (
+          <>
+            {numField('setsCount', 'reps#', 52)}
+            {numField('distanceM', 'meters', 76)}
+            {textField('duration', 'duration', "e.g. 20'", 76)}
+            {textField('paceOrPower', 'pace/power', "e.g. 4'40\"/km", 112)}
+            {textField('rest', 'rest', 'e.g. 60"', 68)}
+          </>
+        )}
       </div>
     </div>
   )
@@ -84,8 +116,42 @@ function SetRow({ set, color, onSetStatus }) {
   )
 }
 
+/** Mon–Sun day picker for moving a session within its own week — life
+ * happens (an easy run planned for Wednesday actually fits Tuesday
+ * better), and the plan should bend to that without needing a full
+ * re-import. Deliberately scoped to the session's current week only
+ * (not a free-roaming date picker): moving further than that is a
+ * planning change, not a scheduling one, and belongs in the next
+ * generated block instead. */
+function DayPicker({ date, onPick }) {
+  const weekStart = startOfWeekMon(date)
+  const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
+
+  return (
+    <div className="flex gap-1.5">
+      {days.map((d) => {
+        const selected = isSameDay(d, date)
+        return (
+          <button
+            key={d.toISOString()}
+            onClick={() => onPick(d)}
+            className={`flex-1 flex flex-col items-center py-1.5 rounded-lg ${
+              selected ? 'bg-accent text-white' : 'bg-panel text-main-text'
+            }`}
+          >
+            <span className="text-[10px] font-semibold opacity-80">{format(d, 'EEE')}</span>
+            <span className="text-sm font-semibold">{format(d, 'd')}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 /** Session detail — completion toggling, editable prescribed sets, notes,
- * and athlete feedback. Ported from SessionDetailView.swift. */
+ * and athlete feedback. Ported from SessionDetailView.swift, plus a
+ * within-week day picker (PWA-only addition, see `DayPicker`'s doc
+ * comment). */
 export default function SessionDetailSheet({ session, onClose }) {
   const [isEditing, setIsEditing] = useState(false)
   const [local, setLocal] = useState(session)
@@ -123,6 +189,13 @@ export default function SessionDetailSheet({ session, onClose }) {
     db.sessions.update(local.id, { sets })
   }
 
+  const moveToDay = (newDate) => {
+    // De-dup key is date+discipline+title (see PLAN_SCHEMA.md) — keep it
+    // in sync with the move so a future re-import of the original plan
+    // still recognizes this session by its new date, not its old one.
+    persist({ date: newDate.toISOString(), importKey: makeImportKey(newDate, local.discipline, local.title) })
+  }
+
   return (
     <Sheet title={local.title} onClose={onClose}>
       <div className="p-4 flex flex-col gap-6">
@@ -144,6 +217,13 @@ export default function SessionDetailSheet({ session, onClose }) {
             )}
           </div>
           <span className="text-sm text-minor-text shrink-0">{format(new Date(local.date), 'MMM d, yyyy')}</span>
+        </div>
+
+        <div>
+          <div className="text-xs font-semibold text-minor-text uppercase tracking-wide mb-2">
+            Reschedule for a different day
+          </div>
+          <DayPicker date={asDate(local.date)} onPick={moveToDay} />
         </div>
 
         {(!local.sets || local.sets.length === 0) && (

@@ -245,6 +245,16 @@ double-check before shipping a plan.
       a triathlete.
 - [ ] Doubles and the week's longest session land on the listed
       higher-time dates (§7.5.1), not on an arbitrary day.
+- [ ] The `Experience tier: ...` line's modifiers (§7.7 — weekly increase
+      cap, rest-day minimum, quality-session cap, cueing detail) are
+      actually reflected in the prescribed week, not just acknowledged
+      in prose.
+- [ ] Any flagged past injury or ongoing condition is reflected in an
+      actual prescription adjustment (§7.8), not just repeated back in
+      Notes verbatim.
+- [ ] Lifestyle recovery bias (§7.9), when applicable, is visible in
+      where volume sits within the phase's §7.1 range — not silently
+      ignored.
 
 ---
 
@@ -461,3 +471,84 @@ plan:
   just a specialty session to fit in when there's room — and a
   higher-time day (§7.5.1) is the natural home for it.
 
+### 7.7 Athlete experience tier — binding progression modifiers
+
+Every plan explicitly targets one of three experience tiers, computed from
+onboarding answers (and log depth once one exists) and stated directly in
+the check-in prompt as an `Experience tier: ...` line — treat that line as
+authoritative. It's computed once, deterministically, by the app itself
+(`experienceTierLine` in `planPromptBuilder.js`), specifically so the tier
+doesn't drift between different AI tools/models generating different
+blocks for the same athlete — don't re-derive it from scratch or override
+it based on a hunch about the log.
+
+- **Beginner** — cap weekly volume increases at **5%** block-to-block
+  (tighter than the general ~7% baseline elsewhere in §7.1). Never
+  schedule two hard/quality sessions on consecutive days. Guarantee **at
+  least 2** full rest days per week, not just one. Cap quality
+  (threshold/interval/race-pace) work at one session per week until at
+  least 2-3 logged blocks show it's being handled well. Write extra
+  explicit technique/form cueing into session `notes` — a beginner needs
+  more "what this should feel like" guidance than an experienced athlete
+  given the same prescribed set.
+- **Intermediate** — the baseline behavior assumed elsewhere in this
+  document by default: ~7% weekly increase cap, at least 1 rest day per
+  week, up to 2 quality sessions per week, standard periodization pacing.
+  This is also the default tier when the onboarding signals are mixed or
+  genuinely inconclusive.
+- **Advanced** — weekly increases can run up to ~10% when the log
+  supports it (§7.3 still governs — never outrun demonstrated capacity
+  just because the tier allows more). Back-to-back quality days (e.g., a
+  Saturday brick followed by a Sunday tempo run) are permissible if the
+  week's overall structure still respects recovery. Up to 3 quality/key
+  sessions per week. At least 1 full rest day per week is still a hard
+  floor — Advanced does not mean zero recovery days.
+
+**Once a meaningful training log exists (roughly 3+ logged weeks), let
+demonstrated capacity (§7.3) lead over the onboarding-derived tier** — the
+tier exists to give the *first* block(s) a sensible starting point when
+there's no log yet to read fitness from. If the tier and the log disagree
+(e.g., tier says Beginner but the log already shows the athlete handling
+Intermediate-level volume comfortably), trust the log and note the
+tier's effective upgrade in that block's `## Notes`.
+
+### 7.8 Injury & ongoing condition adaptation — binding, not just contextual
+
+The check-in prompt's athlete background section may include past injury
+history and/or a currently-ongoing condition/niggle the athlete flagged
+during onboarding. Treat these as binding constraints on the plan, not
+background color to mention once and then ignore:
+
+- If a **past injury** is reported (implicitly resolved, no longer
+  active — the onboarding question is phrased in the past tense), bias the
+  return-to-load progression more conservatively for the specific movement
+  pattern or discipline involved (e.g., a past IT-band issue → ramp weekly
+  run volume more gradually than §7.7's tier-based cap would otherwise
+  allow, and favor gym/S&C work that supports that area).
+- If an **ongoing condition** is reported, treat it as an active
+  constraint for the *whole block*, not just the first week: avoid
+  prescribing exercises/movements that plausibly aggravate it, and add a
+  line in `## Notes` naming what was avoided/adjusted and why, plus a
+  suggestion to confirm with a physio/doctor before progressing that
+  specific area further. Never diagnose the condition or promise a
+  training fix for it — the plan works around it, it doesn't treat it.
+- When choosing between two otherwise-equal session designs and one is
+  more conservative regarding a flagged injury/condition, choose the
+  conservative one.
+
+### 7.9 Lifestyle-adjusted recovery capacity
+
+`onboardingJobType` and `onboardingSleepHours` (when supplied) bias where
+in each week's volume range (§7.1) the plan should sit, independent of the
+experience tier (§7.7) — the two stack, they don't override each other:
+
+- **Physically active job**, or **reported sleep under ~6.5h/night**: bias
+  toward the lower half of §7.1's volume range for that phase, and avoid
+  stacking a hard training day on top of what the athlete's schedule
+  suggests is a regular demanding-work day.
+- **Desk job** and **adequate reported sleep (~7-9h/night)**: no bias
+  needed — use the tier-appropriate default within §7.1's range.
+- This is a bias on *where in the range* to land, not a hard cap the way
+  §7.5's day-count limit is — it never overrides §7.7's weekly-increase
+  cap or §7.5's day-count ceiling, it just nudges volume lower within
+  whatever range those already allow.

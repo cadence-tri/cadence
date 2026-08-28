@@ -63,7 +63,10 @@ function completedRunReadiness(sessions, targetKm, today = new Date()) {
   const longest = runs.reduce((max, s) => Math.max(max, derivedDistanceKm(s) ?? 0), 0)
   const cutoff = startOfDay(today).getTime() - 28 * DAY_MS
   const recentKm = runs
-    .filter((s) => asDate(s.date).getTime() >= cutoff)
+    .filter((s) => {
+      const date = asDate(s.date)
+      return date && date.getTime() >= cutoff
+    })
     .reduce((sum, s) => sum + (derivedDistanceKm(s) ?? 0), 0)
   const weeklyAvg = recentKm / 4
   const longRatio = Math.min(1, longest / Math.max(1, targetKm * (targetKm >= 30 ? 0.7 : 0.8)))

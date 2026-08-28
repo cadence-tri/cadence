@@ -55,15 +55,6 @@ export default function DailyScreen({ profile, onOpenSession, onOpenProfile, onO
     await db.sessions.delete(id)
   }
 
-  const setPhase = async (weekStart, phase) => {
-    const existing = weekPhases.find((wp) => isSameDay(asDate(wp.weekStart), weekStart))
-    if (existing) {
-      await db.weekPhases.update(existing.id, { phase })
-    } else {
-      await db.weekPhases.add({ weekStart: weekStart.toISOString(), phase })
-    }
-  }
-
   const phaseForWeek = (weekStart) => {
     const row = weekPhases.find((wp) => isSameDay(asDate(wp.weekStart), weekStart))
     return row?.phase ?? 'maintenance'
@@ -166,7 +157,6 @@ export default function DailyScreen({ profile, onOpenSession, onOpenProfile, onO
                   <WeekHeaderView
                     weekStart={week.weekStart}
                     phase={phaseForWeek(week.weekStart)}
-                    onPhaseChange={(p) => setPhase(week.weekStart, p)}
                   />
                   {week.days.map((day) => (
                     <div key={day.date.toISOString()}>

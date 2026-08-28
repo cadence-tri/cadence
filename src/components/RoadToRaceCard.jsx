@@ -1,14 +1,19 @@
-import { useEffect, useMemo } from 'react'
-import { useLiveQuery } from 'dexie-react-hooks'
+import { Component, useMemo } from 'react'
 import { asDate, daysBetween, startOfDay, startOfWeekMon } from '../services/dateUtils'
 import { phaseDisplayName } from '../db/phase'
 import { phaseForDate } from '../db/weekPhase'
 import { derivedDistanceKm, isFullyCompleted, totalDistanceKm } from '../db/session'
-import { runningPaceTargets, triathlonNumericTargets } from '../services/planning/planRules'
+import { PHASE_WINDOWS_DAYS, runningPaceTargets, triathlonNumericTargets } from '../services/planning/planRules'
 import { raceProjection, projectionDisplay } from '../services/raceProjection'
-import db from '../db/db'
 
-const PHASE_STEPS = ['Build-Up', 'Endurance', 'Peak', 'Taper', 'Race']
+const DAY_MS = 86400000
+
+const TRACK_PHASES = [
+  { key: 'buildUp', label: 'Build-Up' },
+  { key: 'endurance', label: 'Endurance' },
+  { key: 'peak', label: 'Peak' },
+  { key: 'taper', label: 'Taper' },
+]
 
 const PHASE_DESCRIPTIONS = {
   buildUp: 'Building consistent aerobic volume and durable training habits.',
@@ -57,38 +62,166 @@ function MetricBox({ value, label, detail }) {
   )
 }
 
-function PhaseTrack({ phase }) {
-  const phasePosition = {
-    buildUp: 0,
-    endurance: 1,
-    peak: 2,
-    taper: 3,
-    recovery: 1,
-    maintenance: 0,
-  }[phase] ?? 0
+function clamp01(value) {
+  return Math.min(1, Math.max(0, value))
+}
 
-  const markerPct = (phasePosition / (PHASE_STEPS.length - 1)) * 100
+function startPct(startMs, endMs, valueMs) {
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return 0
+  return clamp01((valueMs - startMs) / (endMs - startMs)) * 100
+}
+
+function raceBasePhase(profile, pointInTime) {
+  if (!profile?.competitionDate) return 'buildUp'
+  const raceDate = startOfDay(asDate(profile.competitionDate))
+  const weekStart = startOfWeekMon(pointInTime)
+  const daysOut = Math.round((raceDate - weekStart) / DAY_MS)
+  const taperDays = profile.sport === 'running' && profile.runningDistance === 'marathon'
+    ? PHASE_WINDOWS_DAYS.taperMarathon
+    : PHASE_WINDOWS_DAYS.taperDefault
+
+  if (daysOut <= taperDays) return 'taper'
+  if (daysOut <= PHASE_WINDOWS_DAYS.peak) return 'peak'
+  if (daysOut <= PHASE_WINDOWS_DAYS.endurance) return 'endurance'
+  return 'buildUp'
+}
+
+function buildTrackLayout(profile, planStart, raceDate) {
+  const safePlanStart = asDate(planStart)
+  const safeRaceDate = asDate(raceDate)
+  if (!safePlanStart || !safeRaceDate) {
+    return {
+      segments: [{ key: 'buildUp', label: 'Build-Up', startPct: 0, endPct: 100, labelPct: 50 }],
+      boundaries: [],
+    }
+  }
+
+  const start = startOfWeekMon(safePlanStart)
+  const end = startOfDay(safeRaceDate)
+  const startMs = start.getTime()
+  const endMs = end.getTime()
+
+  if (!(endMs > startMs)) {
+    return {
+      segments: [{ key: 'buildUp', label: 'Build-Up', startPct: 0, endPct: 100, labelPct: 50 }],
+      boundaries: [],
+    }
+  }
+
+  const taperDays = profile.sport === 'running' && profile.runningDistance === 'marathon'
+    ? PHASE_WINDOWS_DAYS.taperMarathon
+    : PHASE_WINDOWS_DAYS.taperDefault
+
+  const transitions = [
+    { key: 'endurance', at: startOfWeekMon(new Date(endMs - PHASE_WINDOWS_DAYS.endurance * DAY_MS)) },
+    { key: 'peak', at: startOfWeekMon(new Date(endMs - PHASE_WINDOWS_DAYS.peak * DAY_MS)) },
+    { key: 'taper', at: startOfWeekMon(new Date(endMs - taperDays * DAY_MS)) },
+  ]
+    .filter(({ at }) => at.getTime() > startMs && at.getTime() < endMs)
+    .sort((a, b) => a.at - b.at)
+
+  const segments = []
+  let cursor = start
+  let currentKey = raceBasePhase(profile, cursor)
+
+  for (const transition of transitions) {
+    const boundary = transition.at
+    if (boundary > cursor) {
+      const segStartMs = cursor.getTime()
+      const segEndMs = boundary.getTime()
+      segments.push({
+        key: currentKey,
+        label: TRACK_PHASES.find((phase) => phase.key === currentKey)?.label ?? phaseDisplayName(currentKey),
+        startPct: startPct(startMs, endMs, segStartMs),
+        endPct: startPct(startMs, endMs, segEndMs),
+        labelPct: startPct(startMs, endMs, segStartMs + ((segEndMs - segStartMs) / 2)),
+      })
+    }
+    cursor = boundary
+    currentKey = transition.key
+  }
+
+  if (end > cursor) {
+    const segStartMs = cursor.getTime()
+    segments.push({
+      key: currentKey,
+      label: TRACK_PHASES.find((phase) => phase.key === currentKey)?.label ?? phaseDisplayName(currentKey),
+      startPct: startPct(startMs, endMs, segStartMs),
+      endPct: 100,
+      labelPct: startPct(startMs, endMs, segStartMs + ((endMs - segStartMs) / 2)),
+    })
+  }
+
+  return {
+    segments,
+    boundaries: segments.slice(0, -1).map((segment) => segment.endPct),
+  }
+}
+
+function layoutTrackLabels(segments) {
+  const labels = segments.map((segment) => ({
+    key: segment.key,
+    label: segment.label,
+    leftPct: segment.labelPct,
+    align: 'center',
+  }))
+
+  labels.push({ key: 'race', label: 'Race', leftPct: 100, align: 'right' })
+
+  // Short late-plan phases can be only a few percent wide, which makes
+  // centred labels collide on phones. Keep the horizontal position truthful
+  // to each phase, but stagger only the text vertically when necessary.
+  const lastPctByRow = [-Infinity, -Infinity, -Infinity]
+  return labels
+    .sort((a, b) => a.leftPct - b.leftPct)
+    .map((label) => {
+      const minGapPct = 10.5
+      let row = lastPctByRow.findIndex((lastPct) => label.leftPct - lastPct >= minGapPct)
+      if (row === -1) row = lastPctByRow.indexOf(Math.min(...lastPctByRow))
+      lastPctByRow[row] = label.leftPct
+      return { ...label, row }
+    })
+}
+
+function PhaseTrack({ phase, progress, planStart, raceDate, profile }) {
+  const markerPct = clamp01(progress) * 100
+  const layout = buildTrackLayout(profile, planStart, raceDate)
+  const activeSegment = layout.segments.find((segment) => markerPct <= segment.endPct + 0.01)
+  const lastSegment = layout.segments.length ? layout.segments[layout.segments.length - 1] : null
+  const activePhaseKey = activeSegment?.key ?? lastSegment?.key ?? phase
+  const labels = layoutTrackLabels(layout.segments)
 
   return (
     <div className="mt-4">
-      <div className="relative h-4">
-        <div className="absolute left-1 right-1 top-[6px] h-1 rounded-full bg-minor-text/25" />
+      <div className="relative h-5">
+        <div className="absolute left-0 right-0 top-[8px] h-1 rounded-full bg-minor-text/25" />
+        {layout.boundaries.map((boundary) => (
+          <div
+            key={boundary}
+            className="absolute top-[2px] h-3 w-px bg-minor-text/18"
+            style={{ left: `calc(${boundary}% - 0.5px)` }}
+          />
+        ))}
         <div
-          className="absolute left-1 top-[6px] h-1 rounded-full bg-accent"
-          style={{ width: `calc(${markerPct}% - ${markerPct === 0 ? 0 : 4}px)` }}
+          className="absolute left-0 top-[8px] h-1 rounded-full bg-accent"
+          style={{ width: `${markerPct}%` }}
         />
         <div
           className="absolute top-0 w-4 h-4 rounded-full border-[4px] border-accent bg-panel -translate-x-1/2"
-          style={{ left: `calc(4px + (100% - 8px) * ${markerPct / 100})` }}
+          style={{ left: `${markerPct}%` }}
         />
       </div>
-      <div className="mt-2 grid grid-cols-5 gap-1">
-        {PHASE_STEPS.map((step, index) => (
+
+      <div className="relative mt-2 h-[54px]">
+        {labels.map((label) => (
           <span
-            key={step}
-            className={`text-[10px] font-semibold ${index === phasePosition ? 'text-main-text' : 'text-minor-text'}`}
+            key={label.key}
+            className={`absolute whitespace-nowrap text-[10px] font-semibold ${label.key === activePhaseKey ? 'text-main-text' : 'text-minor-text'}`}
+            style={label.align === 'right'
+              ? { right: 0, top: `${label.row * 16}px` }
+              : { left: `${label.leftPct}%`, top: `${label.row * 16}px`, transform: 'translateX(-50%)' }}
           >
-            {step}
+            {label.label}
           </span>
         ))}
       </div>
@@ -106,45 +239,9 @@ function formatSwimPace(value) {
   return value?.replace('/100m', ' /100m') ?? null
 }
 
-export default function RoadToRaceCard({ profile, sessions, weekPhases, onOpenProfile }) {
-  const raceKey = useMemo(() => [
-    profile.sport,
-    profile.sport === 'triathlon' ? profile.triathlonDistance : profile.runningDistance,
-    profile.competitionDate ?? '',
-    profile.competitionName?.trim() ?? '',
-  ].join('|'), [profile])
-
+function RoadToRaceCardContent({ profile, sessions, weekPhases, onOpenProfile }) {
   const projection = useMemo(() => raceProjection(profile, sessions), [profile, sessions])
   const projectionText = useMemo(() => projectionDisplay(projection), [projection])
-  const projectionHistory = useLiveQuery(
-    () => db.raceProjections?.where('raceKey').equals(raceKey).sortBy('date') ?? [],
-    [raceKey],
-    [],
-  )
-
-  useEffect(() => {
-    if (projection.status !== 'ready' || !db.raceProjections) return
-    const date = new Date().toLocaleDateString('en-CA')
-    db.raceProjections.put({
-      raceKey,
-      date,
-      projectedSeconds: Math.round(projection.seconds),
-      lowerSeconds: Math.round(projection.lowerSeconds),
-      upperSeconds: Math.round(projection.upperSeconds),
-      confidence: projection.confidence,
-    }).catch(() => {})
-  }, [raceKey, projection.status, projection.seconds, projection.lowerSeconds, projection.upperSeconds, projection.confidence])
-
-  const projectionTrend = useMemo(() => {
-    if (projection.status !== 'ready' || !projectionHistory.length) return null
-    const cutoff = Date.now() - 28 * 86400000
-    const baseline = projectionHistory.find((entry) => asDate(entry.date).getTime() >= cutoff) ?? projectionHistory[0]
-    if (!baseline || !Number.isFinite(baseline.projectedSeconds)) return null
-    const deltaSeconds = baseline.projectedSeconds - projection.seconds
-    if (Math.abs(deltaSeconds) < 60) return 'Stable over the last 4 weeks'
-    const minutes = Math.max(1, Math.round(Math.abs(deltaSeconds) / 60))
-    return deltaSeconds > 0 ? `↑ ${minutes} min faster over 4 weeks` : `↓ ${minutes} min slower over 4 weeks`
-  }, [projection, projectionHistory])
 
   const data = useMemo(() => {
     const today = startOfDay(new Date())
@@ -167,9 +264,20 @@ export default function RoadToRaceCard({ profile, sessions, weekPhases, onOpenPr
       const currentWeekStart = startOfWeekMon(today)
       const raceWeekStart = startOfWeekMon(competitionDate)
       const weeksBetweenMon = (start, end) => Math.round((end - start) / (7 * 86400000))
+      // A profile can have a target race before its first plan has been
+      // generated. In that state there is no real training-block anchor yet:
+      // show Week 1 of the prospective plan and 0% progress rather than
+      // treating the missing anchor as a one-week, already-complete plan.
+      const displayAnchor = anchor ?? currentWeekStart
       currentWeekNumber = anchor ? Math.max(1, weeksBetweenMon(anchor, currentWeekStart) + 1) : 1
-      totalWeeks = anchor ? Math.max(currentWeekNumber, weeksBetweenMon(anchor, raceWeekStart) + 1) : currentWeekNumber
-      progress = totalWeeks > 0 ? Math.min(1, Math.max(0, currentWeekNumber / totalWeeks)) : 0
+      totalWeeks = Math.max(currentWeekNumber, weeksBetweenMon(displayAnchor, raceWeekStart) + 1)
+
+      if (anchor) {
+        const planStart = startOfDay(anchor)
+        const totalPlanDays = Math.max(1, daysBetween(planStart, competitionDate))
+        const elapsedPlanDays = Math.max(0, daysBetween(planStart, today))
+        progress = Math.min(1, elapsedPlanDays / totalPlanDays)
+      }
     }
 
     const weekStart = startOfWeekMon(today)
@@ -188,13 +296,28 @@ export default function RoadToRaceCard({ profile, sessions, weekPhases, onOpenPr
       .filter((session) => session.discipline === 'run' && isFullyCompleted(session))
       .reduce((max, session) => Math.max(max, derivedDistanceKm(session) ?? 0), 0)
 
+    const currentWeekStart = startOfWeekMon(today)
+    const explicitCurrentPhase = weekPhases.find((row) => {
+      const rowDate = asDate(row.weekStart)
+      return rowDate && startOfWeekMon(rowDate).getTime() === currentWeekStart.getTime()
+    })?.phase
+
+    // phaseForDate intentionally defaults to Maintenance for generic lookups,
+    // but that is the wrong UX for a brand-new race profile. Until the first
+    // generated block persists a week phase, the athlete starts in Build-Up
+    // (or, for an unusually close race, the scheduler's race-driven phase).
+    const currentPhase = explicitCurrentPhase
+      ?? (hasCompetition ? raceBasePhase(profile, today) : phaseForDate(weekPhases, today))
+
     return {
       hasCompetition,
+      competitionDate,
       daysRemaining,
       currentWeekNumber,
       totalWeeks,
       progress,
-      phase: phaseForDate(weekPhases, today),
+      phase: currentPhase,
+      planStart: anchor ?? today,
       runningWeekKm,
       longestCompletedRunKm,
       runningTargets: runningPaceTargets(profile),
@@ -277,7 +400,6 @@ export default function RoadToRaceCard({ profile, sessions, weekPhases, onOpenPr
                   <p className="mt-1 text-xs leading-relaxed text-minor-text">
                     Estimated range {projectionText?.range} · {projection.confidence} confidence
                   </p>
-                  {projectionTrend && <p className="mt-1 text-xs font-semibold text-positive">{projectionTrend}</p>}
                 </>
               ) : (
                 <>
@@ -302,7 +424,13 @@ export default function RoadToRaceCard({ profile, sessions, weekPhases, onOpenPr
             <>
               <div className="text-base font-bold text-main-text">Current phase: {phaseLabel}</div>
               <p className="mt-1 text-xs leading-relaxed text-minor-text">{PHASE_DESCRIPTIONS[data.phase]}</p>
-              <PhaseTrack phase={data.phase} />
+              <PhaseTrack
+                phase={data.phase}
+                progress={data.progress}
+                planStart={data.planStart}
+                raceDate={data.competitionDate}
+                profile={profile}
+              />
             </>
           ) : (
             <p className="text-sm leading-relaxed text-main-text">
@@ -316,5 +444,48 @@ export default function RoadToRaceCard({ profile, sessions, weekPhases, onOpenPr
         </div>
       </div>
     </section>
+  )
+}
+
+class RoadToRaceErrorBoundary extends Component {
+  constructor(props) {
+    super(props)
+    this.state = { hasError: false }
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+
+  componentDidCatch(error) {
+    // Keep a Road to Race rendering regression from taking down the entire
+    // application. The console entry still makes the underlying error visible
+    // during development.
+    console.error('Road to Race failed to render', error)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <section>
+          <div className="mb-2 px-1 text-[11px] font-bold uppercase tracking-[0.14em] text-minor-text">Road to Race</div>
+          <div className="rounded-[28px] bg-panel p-5">
+            <div className="text-base font-bold text-main-text">Road to Race is temporarily unavailable</div>
+            <p className="mt-1 text-xs leading-relaxed text-minor-text">
+              Your training plan and logs are unaffected. Reload the app to retry this card.
+            </p>
+          </div>
+        </section>
+      )
+    }
+    return this.props.children
+  }
+}
+
+export default function RoadToRaceCard(props) {
+  return (
+    <RoadToRaceErrorBoundary>
+      <RoadToRaceCardContent {...props} />
+    </RoadToRaceErrorBoundary>
   )
 }

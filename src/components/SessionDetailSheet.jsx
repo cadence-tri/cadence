@@ -18,6 +18,7 @@ import {
 } from '../db/session'
 import { startOfWeekMon, addDays, asDate, isSameDay } from '../services/dateUtils'
 import { db } from '../db/db'
+import { runStepPresentation, runWorkoutOverview } from './runPrescriptionPresentation'
 
 function SkippedBadge() {
   return (
@@ -32,7 +33,7 @@ function SkippedBadge() {
  * brick) gets sets/distance/duration/pace-power/rest — those endurance
  * fields previously had no editable inputs at all, so a run's distance
  * or pace could never actually be changed from this screen. */
-function EditableSetRow({ set, discipline, onChange }) {
+function EditableSetRow({ set, discipline, displayLabel, onChange }) {
   const isGym = discipline === 'gym'
 
   const numField = (key, label, width = 60) => (
@@ -64,7 +65,7 @@ function EditableSetRow({ set, discipline, onChange }) {
 
   return (
     <div className="py-2.5">
-      <div className="text-sm font-semibold text-main-text mb-1.5">{set.exercise || 'Item'}</div>
+      <div className="text-sm font-semibold text-main-text mb-1.5">{displayLabel || set.exercise || 'Item'}</div>
       <div className="flex gap-3 flex-wrap">
         {isGym ? (
           <>
@@ -145,7 +146,7 @@ function GymLoadControl({ set, onWeightChange }) {
   )
 }
 
-function SetRow({ set, color, discipline, showLoadControl, onSetStatus, onWeightChange }) {
+function SetRow({ set, color, discipline, runView, showLoadControl, onSetStatus, onWeightChange }) {
   const setStatus = (status) => () => onSetStatus(status)
   const addressed = set.isCompleted || set.isSkipped
 
@@ -167,16 +168,63 @@ function SetRow({ set, color, discipline, showLoadControl, onSetStatus, onWeight
           style={{ opacity: set.isSkipped ? 1 : 0.35 }}
         />
       </button>
-      <div className="flex-1 flex items-center gap-1.5 flex-wrap">
-        <span className={`text-sm ${addressed ? 'line-through text-minor-text' : 'text-main-text'}`}>
-          {setSummary(showLoadControl ? { ...set, weightKg: null } : set)}
-        </span>
+      <div className="flex-1 min-w-0 flex items-center gap-1.5 flex-wrap">
+        {runView ? (
+          <div className={`min-w-0 ${addressed ? 'line-through text-minor-text' : ''}`}>
+            <div className="flex items-baseline gap-x-1.5 flex-wrap">
+              <span className={`text-sm font-semibold ${addressed ? '' : 'text-main-text'}`}>{runView.label}</span>
+              {runView.quantity && <span className={`text-sm ${addressed ? '' : 'text-main-text'}`}>· {runView.quantity}</span>}
+            </div>
+            {(runView.target || runView.rpe) && (
+              <div className="mt-0.5 flex items-center gap-1.5 flex-wrap text-xs text-minor-text">
+                {runView.target && <span>{runView.target}</span>}
+                {runView.target && runView.rpe && <span aria-hidden="true">·</span>}
+                {runView.rpe && <span>{runView.rpe}</span>}
+              </div>
+            )}
+          </div>
+        ) : (
+          <span className={`text-sm ${addressed ? 'line-through text-minor-text' : 'text-main-text'}`}>
+            {setSummary(showLoadControl ? { ...set, weightKg: null } : set)}
+          </span>
+        )}
         {set.isSkipped && <SkippedBadge />}
         {set.notes && <p className="w-full text-xs text-minor-text">{set.notes}</p>}
         {discipline === 'gym' && showLoadControl && (
           <GymLoadControl set={set} onWeightChange={onWeightChange} />
         )}
       </div>
+    </div>
+  )
+}
+
+function RunWorkoutSummary({ sets }) {
+  const entries = runWorkoutOverview(sets)
+  const hasEffortGuidance = runStepPresentation(sets).some((step) => step.rpe)
+  if (!entries.length) return null
+
+  return (
+    <div className="mb-2.5 rounded-xl border border-minor-text/15 bg-panel px-3 py-2.5">
+      <div className="text-[10px] font-semibold text-minor-text uppercase tracking-wide mb-2">Workout overview</div>
+      <div className="flex flex-col gap-1.5">
+        {entries.map((entry, index) => (
+          <div key={`${entry.label}-${index}`} className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-2 text-xs">
+            <span className="font-semibold text-main-text">{entry.label}</span>
+            <span className="text-main-text">
+              {entry.value || '—'}
+              {entry.detail && <span className="block text-minor-text mt-0.5">{entry.detail}</span>}
+            </span>
+          </div>
+        ))}
+      </div>
+      {hasEffortGuidance && (
+        <details className="mt-2.5 border-t border-minor-text/15 pt-2 text-xs text-minor-text">
+          <summary className="cursor-pointer font-semibold text-main-text">Effort guidance</summary>
+          <p className="mt-1.5 leading-relaxed">
+            Pace is a target, not an obligation. Stay within the prescribed effort range and slow down when fatigue, terrain, or conditions require it.
+          </p>
+        </details>
+      )}
     </div>
   )
 }
@@ -232,6 +280,7 @@ export default function SessionDetailSheet({ session, onClose }) {
   const allPrescribedDone = local.sets?.length > 0
     ? local.sets.every((set) => set.isCompleted)
     : !!local.isCompleted
+  const runViews = local.discipline === 'run' ? runStepPresentation(local.sets) : []
 
   const persist = async (patch) => {
     const updated = { ...local, ...patch }
@@ -342,12 +391,14 @@ export default function SessionDetailSheet({ session, onClose }) {
                 {isEditing ? 'Done' : 'Edit'}
               </button>
             </div>
+            {!isEditing && local.discipline === 'run' && <RunWorkoutSummary sets={local.sets} />}
             <div className="bg-panel rounded-xl px-3 flex flex-col divide-y divide-minor-text/15">
               {local.sets.map((set, i) =>
                 isEditing ? (
-                  <EditableSetRow key={i} set={set} discipline={local.discipline} onChange={(s) => editSet(i, s)} />
+                  <EditableSetRow key={i} set={set} discipline={local.discipline}
+                    displayLabel={runViews[i]?.label} onChange={(s) => editSet(i, s)} />
                 ) : (
-                  <SetRow key={i} set={set} color={color} discipline={local.discipline}
+                  <SetRow key={i} set={set} color={color} discipline={local.discipline} runView={runViews[i]}
                     showLoadControl={local.discipline === 'gym' && local.strengthPrescription?.equipment !== 'bodyweight'}
                     onSetStatus={(status) => setStepStatus(i, status)} onWeightChange={(weightKg) => logGymLoad(i, weightKg)} />
                 )

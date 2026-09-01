@@ -89,6 +89,7 @@ test('focused payload keeps a completed two-week marathon block comfortably belo
     recentSessions: history, planHistory: history, weekPhases: [] })
   const prompt = buildCompactCoachPrompt({ profile, skeleton: second, checkIn: normal, recentSessions: history })
   assert.ok(prompt.length < 30000, `focused prompt was ${prompt.length} characters`)
+  assert.doesNotMatch(prompt, /Each repetition is 25m drill/)
   const decoded = unpackCoachContext(JSON.parse(prompt.slice(prompt.indexOf('CONTEXT\n') + 8)))
   assert.equal(decoded.previousSessions.length, history.length)
   assert.ok(decoded.previousSessions.every(session => session.athleteFeedback.includes('retained')))
@@ -112,6 +113,23 @@ test('compact reply reconstructs identical locked sessions and preserves step cu
   const again = parseMarkdown(JSON.stringify(reply), merged, [], skeleton)
   assert.equal(again.newSessions.length, 0)
   assert.equal(again.summary.skippedDuplicates, merged.length)
+})
+
+test('compact swim replies preserve deterministic drill instructions while allowing an additive Coach cue', () => {
+  const profile = { ...marathonProfile(), sport: 'triathlon', triathlonDistance: 'olympic', trainingDaysPerWeek: 6,
+    onboardingPoolDaysPerWeek: '2', trainingFitness: { swim: { level: 'new' } } }
+  const skeleton = build(profile), reply = coachFixture(skeleton)
+  const sessionIndex = all(skeleton).findIndex(session => session.discipline === 'swim')
+  const drill = all(skeleton)[sessionIndex].endurancePrescription.steps.find(step => step.stepType === 'drill')
+  reply.sessions[sessionIndex].cues = { [drill.stepId]: 'Keep the movement relaxed.' }
+  const parsed = parseMarkdown(JSON.stringify(reply), [], [], skeleton)
+  const imported = parsed.decodedSessions[sessionIndex].sets.find(step => step.stepId === drill.stepId)
+  assert.match(imported.exercise, /→/)
+  assert.match(imported.notes, /25m drill \+ 25m easy full-stroke transfer/)
+  assert.match(imported.notes, /Keep the movement relaxed/)
+  const prompt = buildCompactCoachPrompt({ profile, skeleton, checkIn: normal })
+  assert.ok(prompt.length < 30000, `focused triathlon prompt was ${prompt.length} characters`)
+  assert.doesNotMatch(prompt, /Each repetition is 25m drill/)
 })
 
 test('readable response manifest exposes every session and gym tasks lock slots/titles', () => {

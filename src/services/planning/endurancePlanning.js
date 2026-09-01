@@ -106,10 +106,101 @@ export function targetText(target, discipline) {
   return `${numeric}; controlled effort ${target.effortMin}–${target.effortMax}/10 (slow down if needed)`
 }
 const durationText = (s) => `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`
-function step(id, kind, disc, target, { seconds = null, meters = null, label = null } = {}) {
+function step(id, kind, disc, target, { seconds = null, meters = null, label = null, notes = null, rest = null, setsCount = 1 } = {}) {
   return { stepId: id, stepType: kind, durationSeconds: seconds, distanceM: meters,
     target, exercise: label ?? kind, duration: seconds == null ? null : durationText(seconds),
-    paceOrPower: targetText(target, disc), rest: null, setsCount: 1 }
+    paceOrPower: targetText(target, disc), rest, setsCount, notes }
+}
+
+// Full instructions remain in the local deterministic prescription. The
+// focused Coach payload includes only each short exercise label and step ID,
+// so useful beginner guidance does not inflate the prompt or depend on the LLM.
+export const SWIM_DRILLS = {
+  streamlineKick: {
+    focus: 'body position and kick',
+    label: 'Streamline kick → easy freestyle',
+    notes: 'Kick from the hips with small, quiet movements. Keep your head between your arms and hips near the surface; use a board if needed. On the freestyle length, preserve the same long body line.',
+  },
+  sideKick: {
+    focus: 'body position and breathing',
+    label: 'Side kick → easy freestyle',
+    notes: 'Keep one arm forward and the other at your side. Rotate the whole body slightly to breathe without lifting the head; change sides each repetition. Transfer the same controlled rotation into freestyle.',
+  },
+  strokeAndRoll: {
+    focus: 'breathing and rotation',
+    label: 'Stroke-and-roll breathing → easy freestyle',
+    notes: 'Exhale continuously while your face is in the water. Rotate with the body to breathe without lifting the head, then swim easy freestyle and breathe whenever needed. Never force breath-holding.',
+  },
+  catchUp: {
+    focus: 'entry and coordination',
+    label: 'Catch-up drill → easy freestyle',
+    notes: 'Keep one hand extended until the recovering hand enters in front of its shoulder. Do not touch hands, cross the centre line or exaggerate the glide. On the freestyle length, remove the deliberate pause but keep the clean entry.',
+  },
+  sixKickSwitch: {
+    focus: 'rotation timing',
+    label: 'Six-kick switch → easy freestyle',
+    notes: 'Kick six small beats on one side, take one relaxed stroke to change sides, then repeat. Fins are optional. Transfer the balanced rotation into continuous freestyle without pausing.',
+  },
+  singleArm: {
+    focus: 'pull and breathing timing',
+    label: 'Single-arm freestyle → full stroke',
+    notes: 'Swim one length with one arm while the other remains forward, then change arms next repetition. Keep the head aligned and use relaxed rotation. Return to full stroke with equal pressure from both arms.',
+  },
+  frontScull: {
+    focus: 'catch and feel for the water',
+    label: 'Front scull → easy freestyle',
+    notes: 'Keep the elbows slightly higher than the hands and make small inward-and-outward movements. Feel pressure on the palms and forearms, then swim freestyle while pressing water backward rather than downward.',
+  },
+  fist: {
+    focus: 'forearm engagement',
+    label: 'Fist drill → open-hand freestyle',
+    notes: 'Swim with softly closed fists without increasing effort. Use the forearms during the pull, then open the hands and preserve that same forearm pressure during freestyle.',
+  },
+  pullBuoy: {
+    focus: 'upper-body mechanics',
+    label: 'Pull-buoy freestyle → normal freestyle',
+    notes: 'If a pull buoy is available, place it high between the thighs, keep the body long and pull backward without forcing the shoulders. Then remove it and restore a light kick. If no buoy is available, use the fist drill instead.',
+  },
+  fingertipDrag: {
+    focus: 'relaxed recovery and entry',
+    label: 'Fingertip drag → easy freestyle',
+    notes: 'Let the fingertips skim the surface during recovery. Keep the shoulder relaxed and enter in front of the shoulder, then swim normally with the same relaxed recovery.',
+  },
+  sighting: {
+    focus: 'open-water sighting',
+    label: 'Pool sighting drill → steady freestyle',
+    notes: 'Every six to eight strokes, lift only the eyes briefly, return the face to the water, then take a normal side breath. Continue steady freestyle without losing rhythm or kicking harder.',
+  },
+}
+
+const SWIM_DRILL_BUNDLES = {
+  new: [
+    ['streamlineKick', 'catchUp'],
+    ['sideKick', 'strokeAndRoll'],
+    ['pullBuoy', 'streamlineKick'],
+  ],
+  regular: [
+    ['frontScull', 'fist'],
+    ['sixKickSwitch', 'singleArm'],
+    ['fingertipDrag', 'catchUp'],
+    ['pullBuoy', 'frontScull'],
+  ],
+  experienced: [
+    ['frontScull', 'fist'],
+    ['sixKickSwitch', 'singleArm'],
+    ['pullBuoy', 'fingertipDrag'],
+    ['sighting', 'strokeAndRoll'],
+  ],
+}
+
+export function swimDrillSelection(profile, week) {
+  const level = normalizeFitness(profile.trainingFitness).swim.level
+  const bundles = SWIM_DRILL_BUNDLES[level]
+  let ids = bundles[Math.abs((week.weekNumber ?? 1) - 1) % bundles.length]
+  if (ids.includes('sighting') && !['endurance', 'peak'].includes(week.phase)) {
+    ids = ids.map((id) => id === 'sighting' ? 'catchUp' : id)
+  }
+  return { level, ids, focus: [...new Set(ids.map((id) => SWIM_DRILLS[id].focus))].join(' + ') }
 }
 
 function prescription(profile, session, week, state, decision, checkIn, goal, history, today) {
@@ -127,7 +218,7 @@ function prescription(profile, session, week, state, decision, checkIn, goal, hi
   let [repetitions, workRepSeconds, recoverySeconds] = (purpose === 'raceSpecific' ? RACE_STAGES : WORK_STAGES)[disc][activeStage]
   let stageLimited = false
   if (reduced || week.partial) repetitions = Math.max(2, Math.floor(repetitions / 2))
-  const feedbackRequired = !reduced && !week.partial && ['development', 'calibration', 'assessment', 'threshold', 'raceSpecific'].includes(purpose)
+  let feedbackRequired = !reduced && !week.partial && ['development', 'calibration', 'assessment', 'threshold', 'raceSpecific'].includes(purpose)
   const target = effortTarget(disc, state, purpose)
   let goalUsed = false
   const supported = evidenceFor(history, disc, today).filter((e) => successfulEvidence(e) && e.prescription.purpose === 'raceSpecific' && e.result.actualValue != null)
@@ -140,32 +231,66 @@ function prescription(profile, session, week, state, decision, checkIn, goal, hi
   const steps = []
   const add = (kind, t, opts) => steps.push(step(`${session.skeletonId}:${steps.length + 1}`, kind, disc, t, opts))
   let estimatedDistanceKm = session.targetDistanceKm
+  let drillSelection = null
   if (disc === 'swim') {
     const total = Math.round(session.targetDistanceKm * 1000 / 25) * 25
     const warm = Math.max(25, Math.floor(total * 0.15 / 25) * 25)
     const cool = Math.max(25, Math.floor(total * 0.1 / 25) * 25)
-    add('warmup', easy, { meters: warm, label: 'Easy full-stroke swim' })
-    const drill = Math.min(total - warm - cool - 25, Math.max(25, Math.floor(total * (purpose === 'technique' ? 0.45 : 0.15) / 25) * 25))
-    add('drill', { ...easy, low: null, high: null }, { meters: drill, label: 'Technique drills with relaxed full-stroke transfer; rest as needed' })
+    add('warmup', easy, { meters: warm, label: 'Easy full-stroke swim', notes: 'Start relaxed. Keep the stroke long and breathe whenever needed.' })
+    const available = Math.max(0, total - warm - cool)
+    const skillTarget = Math.max(50, Math.round(total * (purpose === 'technique' ? 0.45 : 0.15) / 50) * 50)
+    const reserveForMain = available >= 75 ? 25 : 0
+    const skillMeters = Math.min(skillTarget, Math.max(0, Math.floor((available - reserveForMain) / 50) * 50))
+    const skillRounds = skillMeters / 50
+    drillSelection = swimDrillSelection(profile, week)
+    const drillIds = drillSelection.ids.slice(0, skillRounds >= 4 ? 2 : 1)
+    drillSelection = { ...drillSelection, ids: drillIds,
+      focus: [...new Set(drillIds.map((id) => SWIM_DRILLS[id].focus))].join(' + ') }
+    let allocatedRounds = 0
+    drillIds.forEach((id, index) => {
+      const rounds = Math.floor(skillRounds / drillIds.length) + (index < skillRounds % drillIds.length ? 1 : 0)
+      if (!rounds) return
+      allocatedRounds += rounds
+      const drill = SWIM_DRILLS[id]
+      add('drill', { ...easy, low: null, high: null }, {
+        meters: 50,
+        setsCount: rounds,
+        rest: '20–30s after each 50m',
+        label: drill.label,
+        notes: `Each repetition is 25m drill + 25m easy full-stroke transfer. ${drill.notes}`,
+      })
+    })
+    const drill = allocatedRounds * 50
     const remaining = total - warm - cool - drill
     const swimStages = (purpose === 'raceSpecific' ? RACE_STAGES : WORK_STAGES).swim
-    while (activeStage > 0 && repetitions * workRepSeconds > remaining) {
+    while (activeStage > 0 && repetitions * workRepSeconds > remaining && remaining > 0) {
       activeStage--
       stageLimited = true
       ;[repetitions, workRepSeconds, recoverySeconds] = swimStages[activeStage]
       if (reduced || week.partial) repetitions = Math.max(2, Math.floor(repetitions / 2))
     }
-    const repDistance = workRepSeconds
-    repetitions = Math.max(1, Math.min(repetitions, Math.floor(remaining / 25)))
-    const workMeters = Math.min(Math.floor(remaining / repetitions / 25) * 25, repDistance)
-    if (workMeters < repDistance) stageLimited = true
-    for (let i = 0; i < repetitions; i++) {
-      add('work', target, { meters: workMeters, label: purpose === 'technique' ? 'Relaxed full-stroke technique transfer' : 'Controlled full-stroke swim' })
-      if (i < repetitions - 1) add('recovery', { ...easy, low: null, high: null }, { seconds: recoverySeconds, label: 'Rest at wall' })
+    let workMeters = 0
+    if (remaining > 0) {
+      const repDistance = workRepSeconds
+      repetitions = Math.max(1, Math.min(repetitions, Math.floor(remaining / 25)))
+      workMeters = Math.min(Math.floor(remaining / repetitions / 25) * 25, repDistance)
+      if (workMeters < repDistance) stageLimited = true
+      add('work', target, {
+        meters: workMeters,
+        setsCount: repetitions,
+        rest: repetitions > 1 ? `${recoverySeconds}s between repetitions` : null,
+        label: purpose === 'technique' ? 'Controlled full-stroke swim — preserve the drill cues' : 'Controlled full-stroke swim',
+        notes: 'Keep the stroke controlled and stop or extend the rest if technique deteriorates.',
+      })
+    } else {
+      repetitions = 0
+      recoverySeconds = 0
+      stageLimited = true
+      feedbackRequired = false
     }
     if (remaining - workMeters * repetitions > 0) add('easy', easy, { meters: remaining - workMeters * repetitions, label: 'Easy full-stroke swim; preserve form' })
-    add('cooldown', easy, { meters: cool, label: 'Easy cool-down swim' })
-    workRepSeconds = round(workMeters / 100 * (state.workingValue ?? 180))
+    add('cooldown', easy, { meters: cool, label: 'Easy cool-down swim', notes: 'Finish relaxed with continuous exhalation and no forced breathing pattern.' })
+    workRepSeconds = repetitions ? round(workMeters / 100 * (state.workingValue ?? 180)) : 0
     estimatedDistanceKm = total / 1000
   } else {
     const f = normalizeFitness(profile.trainingFitness)[disc]
@@ -221,9 +346,10 @@ function prescription(profile, session, week, state, decision, checkIn, goal, hi
     seasonAnchor: session.seasonAnchor ?? null,
     baseline: { value: state.value, source: state.source, assessedOn: state.assessedOn, status: state.status, workingValue: state.workingValue },
     repetitions, workRepSeconds, recoverySeconds, workSeconds: repetitions * workRepSeconds,
-    workDistanceM: actualWork.reduce((sum, s) => sum + (s.distanceM ?? 0), 0),
+    workDistanceM: actualWork.reduce((sum, s) => sum + (s.distanceM ?? 0) * (s.setsCount ?? 1), 0),
     feedbackRequired, target, goalReference: goal, goalUsed, estimatedDistanceKm,
     distanceIsEstimate: disc !== 'swim' && !session.distanceLed,
+    swimDrills: drillSelection ? { level: drillSelection.level, focus: drillSelection.focus, ids: drillSelection.ids } : null,
     rationale: `${state.explanation} ${reduced ? 'Recovery/taper: reduced work, baseline unchanged.' : activeDecision.reason}${stageLimited ? ' Session capacity limits the workout; this is not completion of the full progression stage.' : ''}${purpose === 'technique' ? ' Technique focus: more drills, not a speed test.' : ''}${purpose === 'assessment' ? ' Controlled assessment, not a maximal test. Stop or slow if effort is excessive.' : ''}`,
     steps }
 }
@@ -344,7 +470,7 @@ export function applyEndurancePlanning({ profile, weeks, history, today, checkIn
       session.targetPaceOrPower = targetText(p.target, session.discipline)
       session.intensity = p.purpose
       session.targetDistanceKm = p.estimatedDistanceKm
-      session.targetDurationMin = round(p.steps.reduce((sum, s) => sum + (s.durationSeconds ?? (session.discipline === 'swim' ? s.distanceM / 100 * (states.swim.workingValue ?? 180) : s.distanceM / 1000 * (p.target.high ?? (session.discipline === 'bike' ? 180 : 420)))), 0) / 60)
+      session.targetDurationMin = round(p.steps.reduce((sum, s) => sum + (s.durationSeconds ?? (session.discipline === 'swim' ? s.distanceM / 100 * (states.swim.workingValue ?? 180) : s.distanceM / 1000 * (p.target.high ?? (session.discipline === 'bike' ? 180 : 420)))) * (s.setsCount ?? 1), 0) / 60)
       // Soft reductions retain a genuinely feasible easy session. Hard
       // spacing/pain constraints cannot be evaded using Optional.
       if (session.role === 'easy' && (checkIn.recovery === 'fatigued' || checkIn.previousBlockLoad === 'tooHard') && !['recovery', 'taper'].includes(week.phase)) {

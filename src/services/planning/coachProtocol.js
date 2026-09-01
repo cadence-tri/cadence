@@ -268,7 +268,8 @@ export function expandCoachReply(markdown, skeleton) {
     }
     return { ...spec, title: gym ? strengthTitle(spec.strengthPrescription) : entry.title, notes: entry.notes ?? '', skeletonRole: spec.role,
       totalDistance: spec.discipline === 'swim' ? spec.targetDistanceKm * 1000 : spec.targetDistanceKm,
-      sets: gym ? gymSets : steps.map(s => ({ ...s, notes: cues[s.stepId] ?? null })) }
+      sets: gym ? gymSets : steps.map(s => ({ ...s,
+        notes: [s.notes, cues[s.stepId]].filter(Boolean).join(' ') || null })) }
   })
   return { sessions, warnings }
 }

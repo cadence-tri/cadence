@@ -4,7 +4,7 @@ import { buildPlanSkeleton } from '../src/services/planning/planScheduler.js'
 import { validateSkeleton, validateGeneratedPlan, mergeGeneratedWithSkeleton } from '../src/services/planning/planValidator.js'
 import { parseMarkdown, importMarkdown } from '../src/services/markdownImporter.js'
 import { normalizeFitness, paceSeconds, updateFitness, resolveFitness, normalizeWorkoutResult, evidenceFor, baselineReview, dayGap, fitnessFingerprint } from '../src/services/planning/fitness.js'
-import { canonicalEnduranceSets, swimSessionCap, WORK_STAGES } from '../src/services/planning/endurancePlanning.js'
+import { canonicalEnduranceSets, swimSessionCap, swimDrillSelection, SWIM_DRILLS, WORK_STAGES } from '../src/services/planning/endurancePlanning.js'
 import { runningPaceTargets, triathlonNumericTargets } from '../src/services/planning/planRules.js'
 import { sessionDistanceKmForDisplay, durationMinutes, withAllSetsCompleted } from '../src/db/session.js'
 import { parseImportDate, toISODateString } from '../src/services/dateUtils.js'
@@ -69,10 +69,31 @@ test('Olympic weak-swimmer volume is capped and two swims include a true techniq
     assert.equal(swims.length, 2)
     assert.ok(swims.every((s) => s.targetDistanceKm <= 1))
     assert.equal(swims.filter((s) => s.endurancePrescription.purpose === 'technique').length, 1)
-    const drillShare = (s) => s.endurancePrescription.steps.filter((s) => s.stepType === 'drill').reduce((n, s) => n + s.distanceM, 0) / (s.targetDistanceKm * 1000)
+    const stepMeters = (step) => (step.distanceM ?? 0) * (step.setsCount ?? 1)
+    const drillShare = (s) => s.endurancePrescription.steps.filter((s) => s.stepType === 'drill').reduce((n, s) => n + stepMeters(s), 0) / (s.targetDistanceKm * 1000)
     assert.ok(drillShare(swims.find((s) => s.endurancePrescription.purpose === 'technique')) > drillShare(swims.find((s) => s.endurancePrescription.purpose !== 'technique')))
-    for (const s of swims) assert.equal(s.endurancePrescription.steps.reduce((n, s) => n + (s.distanceM ?? 0), 0), s.targetDistanceKm * 1000)
+    for (const s of swims) {
+      assert.equal(s.endurancePrescription.steps.reduce((n, step) => n + stepMeters(step), 0), s.targetDistanceKm * 1000)
+      const drills = s.endurancePrescription.steps.filter((step) => step.stepType === 'drill')
+      assert.ok(drills.length >= 1 && drills.length <= 2)
+      assert.ok(drills.every((step) => step.distanceM === 50 && step.setsCount >= 1
+        && /25m drill \+ 25m easy full-stroke transfer/.test(step.notes)
+        && /20–30s/.test(step.rest)))
+      assert.ok(drills.every((step) => !/Technique drills with relaxed full-stroke transfer/.test(step.exercise)))
+      assert.ok(!s.endurancePrescription.steps.some((step) => step.stepType === 'recovery' && step.exercise === 'Rest at wall'))
+    }
   }
+})
+
+test('swim drill selection is level-aware, deterministic and keeps safety/equipment fallbacks explicit', () => {
+  const week = { weekNumber: 1, phase: 'buildUp' }
+  assert.deepEqual(swimDrillSelection(p({ trainingFitness: { swim: { level: 'new' } } }), week).ids, ['streamlineKick', 'catchUp'])
+  assert.deepEqual(swimDrillSelection(p({ trainingFitness: { swim: { level: 'regular' } } }), week).ids, ['frontScull', 'fist'])
+  assert.deepEqual(swimDrillSelection(p({ trainingFitness: { swim: { level: 'experienced' } } }), { weekNumber: 4, phase: 'buildUp' }).ids, ['catchUp', 'strokeAndRoll'])
+  assert.deepEqual(swimDrillSelection(p({ trainingFitness: { swim: { level: 'experienced' } } }), { weekNumber: 4, phase: 'peak' }).ids, ['sighting', 'strokeAndRoll'])
+  assert.match(SWIM_DRILLS.pullBuoy.notes, /If no buoy is available/)
+  assert.match(SWIM_DRILLS.strokeAndRoll.notes, /Never force breath-holding/)
+  assert.ok(Object.values(SWIM_DRILLS).every((drill) => !/hold your breath|fewer breaths|restricted breathing/i.test(drill.notes)))
 })
 
 test('pool access 0/1 is a real limit; one swim keeps drills without a technique-only label', () => {

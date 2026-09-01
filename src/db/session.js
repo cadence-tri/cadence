@@ -187,22 +187,40 @@ export function withAllSetsCompleted(session, completed) {
   }
 }
 
-/** Consecutive weeks (ending with the current week) in which every counted
- * session was fully completed — matches native's `Array<TrainingSession>.
- * weekStreak()`. */
+export function isCompletedActivity(session) {
+  if (!session || session.discipline === 'rest') return false
+  const sets = session.sets ?? []
+  if (!sets.length) return !!session.isCompleted
+  // A fully skipped workout is addressed for completion-rate purposes but is
+  // not an activity performed and therefore cannot extend the streak.
+  return isFullyCompleted(session) && sets.some((set) => set.isCompleted)
+}
+
+/** Consecutive weeks with at least one completed activity. If the athlete has
+ * not trained yet in the current in-progress week, retain the streak through
+ * the previous week as a grace period instead of resetting it every Monday.
+ * This is derived from stored sessions, so historical weeks update without a
+ * data migration. */
 export function weekStreak(sessions, today = new Date()) {
   let weekStart = startOfWeekMon(today)
   let streak = 0
+  const completedInWeek = (start) => {
+    const end = new Date(start)
+    end.setDate(end.getDate() + 7)
+    return sessions.some((session) => {
+      const date = asDate(session.date)
+      return date >= start && date < end && isCompletedActivity(session)
+    })
+  }
+
+  if (!completedInWeek(weekStart)) {
+    weekStart = new Date(weekStart)
+    weekStart.setDate(weekStart.getDate() - 7)
+  }
   // Bound the loop generously — a multi-year streak is implausible and
   // this guards against an infinite loop on bad data.
   for (let i = 0; i < 1000; i++) {
-    const weekEnd = new Date(weekStart)
-    weekEnd.setDate(weekEnd.getDate() + 7)
-    const counted = sessions.filter((s) => {
-      const d = asDate(s.date)
-      return d >= weekStart && d < weekEnd && countsTowardStats(s)
-    })
-    if (counted.length === 0 || !counted.every(isFullyCompleted)) break
+    if (!completedInWeek(weekStart)) break
     streak += 1
     weekStart = new Date(weekStart)
     weekStart.setDate(weekStart.getDate() - 7)

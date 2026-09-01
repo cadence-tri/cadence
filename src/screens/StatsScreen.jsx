@@ -7,21 +7,23 @@ import { DISCIPLINES, disciplineDisplayName, disciplineColor } from '../db/disci
 import { PHASES, phaseDisplayName, phaseColor } from '../db/phase'
 import { phaseForDate } from '../db/weekPhase'
 import { countsTowardStats, isFullyCompleted, derivedDistanceKm, durationMinutes } from '../db/session'
-import { asDate, startOfWeekMon } from '../services/dateUtils'
+import { asDate } from '../services/dateUtils'
+import { chartUpperBound, formatAxisTick, formatVolumeLabel, weeklyBuckets } from '../services/statsChart'
 import { format } from 'date-fns'
 
-function weeklyBuckets(sessions, keyFn) {
-  const buckets = new Map()
-  for (const s of sessions) {
-    const value = keyFn(s)
-    if (!value || value <= 0) continue
-    const weekStart = startOfWeekMon(asDate(s.date))
-    const key = weekStart.getTime()
-    buckets.set(key, (buckets.get(key) ?? 0) + value)
-  }
-  return [...buckets.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([t, value]) => ({ weekStart: new Date(t), value, label: format(new Date(t), 'd MMM') }))
+function VolumeBarLabel({ x, y, width, value, unit }) {
+  if (![x, y, width, value].every(Number.isFinite)) return null
+  return (
+    <text
+      x={x + width / 2}
+      y={Math.max(11, y - 6)}
+      textAnchor="middle"
+      fontSize={10}
+      fill="var(--color-minor-text)"
+    >
+      {formatVolumeLabel(value, unit)}
+    </text>
+  )
 }
 
 function DisciplinePanel({ discipline, sessions }) {
@@ -45,15 +47,13 @@ function DisciplinePanel({ discipline, sessions }) {
         {disciplineDisplayName(discipline)} — weekly {hasDistance ? 'distance' : 'time'}
       </div>
       <ResponsiveContainer width="100%" height={140}>
-        <BarChart data={points} margin={{ top: 16, right: 8, left: -20, bottom: 0 }}>
+        <BarChart data={points} margin={{ top: 20, right: 8, left: -20, bottom: 0 }}>
           <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--color-minor-text)' }} axisLine={false} tickLine={false} />
-          <YAxis tick={{ fontSize: 10, fill: 'var(--color-minor-text)' }} axisLine={false} tickLine={false} />
+          <YAxis domain={[0, chartUpperBound]} tickCount={5} tickFormatter={formatAxisTick} tick={{ fontSize: 10, fill: 'var(--color-minor-text)' }} axisLine={false} tickLine={false} />
           <Bar dataKey="value" fill={disciplineColor(discipline)} radius={[4, 4, 0, 0]}>
             <LabelList
               dataKey="value"
-              position="top"
-              formatter={(v) => `${v < 10 ? v.toFixed(1) : Math.round(v)} ${unit}`}
-              style={{ fontSize: 10, fill: 'var(--color-minor-text)' }}
+              content={(props) => <VolumeBarLabel {...props} unit={unit} />}
             />
           </Bar>
         </BarChart>
@@ -74,7 +74,7 @@ function GymWeeklyPanel({ sessions }) {
       <ResponsiveContainer width="100%" height={140}>
         <BarChart data={points} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
           <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--color-minor-text)' }} axisLine={false} tickLine={false} />
-          <YAxis tick={{ fontSize: 10, fill: 'var(--color-minor-text)' }} axisLine={false} tickLine={false} allowDecimals={false} />
+          <YAxis tickFormatter={formatAxisTick} tick={{ fontSize: 10, fill: 'var(--color-minor-text)' }} axisLine={false} tickLine={false} allowDecimals={false} />
           <Bar dataKey="value" fill={disciplineColor('gym')} radius={[4, 4, 0, 0]} />
         </BarChart>
       </ResponsiveContainer>
@@ -172,7 +172,7 @@ function GymProgressionSection({ sessions }) {
         <ResponsiveContainer width="100%" height={200}>
           <LineChart data={points} margin={{ top: 8, right: 12, left: -20, bottom: 0 }}>
             <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--color-minor-text)' }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fontSize: 10, fill: 'var(--color-minor-text)' }} axisLine={false} tickLine={false} />
+            <YAxis tickFormatter={formatAxisTick} tick={{ fontSize: 10, fill: 'var(--color-minor-text)' }} axisLine={false} tickLine={false} />
             <Tooltip />
             <Line type="monotone" dataKey="weightKg" stroke={disciplineColor('gym')} strokeWidth={2} dot={{ r: 3 }} />
           </LineChart>

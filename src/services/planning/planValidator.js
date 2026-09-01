@@ -105,9 +105,9 @@ export function validateSkeleton(skeleton, profile) {
       if (s.endurancePrescription) {
         const p = s.endurancePrescription
         if (!p.steps?.length || p.steps.some((step) => (step.durationSeconds == null) === (step.distanceM == null)
-          || (step.durationSeconds ?? step.distanceM) <= 0)) out.errors.push(`${s.skeletonId}: invalid endurance work steps.`)
+          || (step.durationSeconds ?? step.distanceM) <= 0 || !Number.isInteger(step.setsCount) || step.setsCount <= 0)) out.errors.push(`${s.skeletonId}: invalid endurance work steps.`)
         if (s.discipline === 'swim') {
-          const km = p.steps.reduce((sum, step) => sum + (step.distanceM ?? 0), 0) / 1000
+          const km = p.steps.reduce((sum, step) => sum + (step.distanceM ?? 0) * (step.setsCount ?? 1), 0) / 1000
           if (Math.abs(km - s.targetDistanceKm) > 1e-6) out.errors.push(`${s.skeletonId}: swim steps do not sum to the allocated distance.`)
         }
       }

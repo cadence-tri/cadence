@@ -730,7 +730,13 @@ goals are objectives, not evidence of current fitness. Do not use the old
   capacity, continuous-swim comfort, time and pool access. Never cram an old
   weekly target into fewer sessions. At least two swims means one technique
   session with a larger drill share; a single swim mixes drills/full stroke.
-  Drill pace is never used as threshold evidence.
+  The deterministic prescription selects one or two level-appropriate drills,
+  groups them as repeated 25m drill + 25m full-stroke transfer pairs, and owns
+  their execution/safety instructions locally. The Coach receives only compact
+  drill labels and may add a cue; it cannot replace the prescribed drill.
+  Beginner breathing work never prescribes forced breath-holding. Equipment
+  drills include a no-equipment fallback. Drill pace is never used as threshold
+  evidence.
 - Quality spacing/caps apply across disciplines. Brick work remains easy,
   with no inference of fresh-run threshold from off-bike performance.
 - Structured workout results are optional and athlete-entered. Completion,

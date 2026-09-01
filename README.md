@@ -23,16 +23,22 @@ Live at: **https://cadence-tri.github.io/cadence/** (once deployed — see below
   taper. Ordinary sessions develop workload and specificity between checkpoints.
 - **Swim capacity & technique** — volume fits swim ability, session time and
   pool access instead of cramming an inflated weekly target into one session.
-  Two or more swims include one technique-focused session. Timed run/bike/brick
+  Two or more swims include one technique-focused session. Level-aware drill
+  prescriptions use explicit 25m drill + 25m full-stroke transfer pairs with
+  local execution cues, safe breathing guidance and equipment fallbacks.
+  Timed run/bike/brick
   distances are labelled estimates, not measured performance.
 
 - **Daily log** — Overview dashboard (week at a glance, Road to Race
   progress, recovery-week nudges), an Upcoming list grouped by week with
-  editable phase labels, and a browsable Training Log of past weeks.
+  editable phase labels, and a browsable Training Log of past weeks. The weekly
+  streak counts consecutive weeks with at least one completed activity and is
+  derived retroactively from the existing log.
 - **Session tracking** — tick off prescribed sets, log free-text feedback
   and perceived effort per session, review total distance, and edit sets inline.
-- **Stats** — completion rate by discipline, weekly volume charts,
-  gym exercise progression, all filterable by training phase.
+- **Stats** — completion rate by discipline, responsive weekly volume charts
+  with unclipped, human-formatted axes and value labels, and gym exercise
+  progression, all filterable by training phase.
 - **Plan generation** — builds a complete "check-in" prompt (your race
   goal, availability, and recent training history) that you paste into
   a compatible AI conversation. A focused prompt includes athlete evidence,

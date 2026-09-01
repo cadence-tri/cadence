@@ -4,6 +4,10 @@ import { buildPlanSkeleton } from '../src/services/planning/planScheduler.js'
 import { validateSkeleton, validateGeneratedPlan, mergeGeneratedWithSkeleton } from '../src/services/planning/planValidator.js'
 import { runningPaceTargets, parseDurationSeconds } from '../src/services/planning/planRules.js'
 import { effortLabel, sessionDistanceKmForDisplay, withAllSetsCompleted } from '../src/db/session.js'
+import { canonicalEnduranceSets } from '../src/services/planning/endurancePlanning.js'
+// These fixtures describe local calendar dates, not UTC-midnight instants.
+// Keep real instant handling covered separately; do not reinterpret old backups.
+const localISO = date => new Date(`${date}T00:00:00`).toISOString()
 
 const profile = (overrides = {}) => ({
   id: 1,
@@ -112,11 +116,17 @@ test('generated response must preserve locked ids, roles, dates, disciplines and
     skeletonRole: spec.role,
     weekLabel: spec.weekLabel,
     brickTargets: spec.brickTargets,
+    strengthPrescription: spec.strengthPrescription,
+    endurancePrescription: spec.endurancePrescription,
+    isOptional: spec.isOptional,
     date: spec.date,
     discipline: spec.discipline,
     title: `Generated ${spec.role}`,
     totalDistance: spec.targetDistanceKm == null ? null : (spec.discipline === 'swim' ? spec.targetDistanceKm * 1000 : spec.targetDistanceKm),
-    sets: [],
+    sets: spec.strengthPrescription ? spec.strengthPrescription.exerciseSlots.map(slot => ({
+      slot, exercise: `${slot} exercise`, setsCount: slot === 'core' ? spec.strengthPrescription.coreSets : spec.strengthPrescription.workSetsMin,
+      isCore: slot === 'core',
+    })) : spec.endurancePrescription ? canonicalEnduranceSets(spec.endurancePrescription) : [],
   }))
   assert.deepEqual(validateGeneratedPlan({ skeleton, sessions: generated }).errors, [])
   const altered = generated.map((s, i) => i === 0 ? { ...s, date: '2026-01-01' } : s)
@@ -128,8 +138,8 @@ test('running goal-time pacing is derived deterministically', () => {
   assert.equal(parseDurationSeconds('1:45:00'), 6300)
   const targets = runningPaceTargets(profile({ runningDistance: 'halfMarathon', goalOverallTime: '1:45:00' }))
   assert.match(targets.racePace, /^4:5\d\/km$/)
-  assert.ok(targets.easyPace)
-  assert.ok(targets.thresholdPace)
+  assert.equal(targets.easyPace, null)
+  assert.equal(targets.thresholdPace, null, 'goal alone must not manufacture a threshold')
 })
 
 test('returning block phase is derived from race proximity instead of defaulting to Maintenance', () => {
@@ -176,9 +186,9 @@ test('legacy backup phase normalization uses the current profile instead of impo
     trainingBlockStartDate: '2026-08-28',
   })
   const importedSessions = [
-    { date: '2026-08-24T00:00:00.000Z', discipline: 'run' },
-    { date: '2026-08-28T00:00:00.000Z', discipline: 'run' },
-    { date: '2026-08-30T00:00:00.000Z', discipline: 'run' },
+    { date: localISO('2026-08-24'), discipline: 'run' },
+    { date: localISO('2026-08-28'), discipline: 'run' },
+    { date: localISO('2026-08-30'), discipline: 'run' },
   ]
 
   const phases = deterministicWeekPhasesForImportedSessions(currentProfile, importedSessions)
@@ -197,6 +207,7 @@ test('marathon five-day Advanced first plan allocates every running week exactly
     onboardingConsistencyRating: 'Very consistent',
     onboardingAlreadyRuns: true,
     onboardingKnowsThreshold: true,
+    trainingFitness: { run: { maxSessionMinutes: 180 } },
     onboardingThresholdDetails: 'Threshold pace 4:20/km',
   })
   const skeleton = buildPlanSkeleton({ profile: p, recentSessions: [], weekPhases: [], checkIn: normalCheckIn, today })
@@ -340,13 +351,13 @@ test('week numbering continues deterministically from original plan start throug
     goalOverallTime: '3:30:00',
   })
   const planHistory = [
-    { date: '2026-08-28T00:00:00.000Z', discipline: 'run', totalDistance: 5 },
-    { date: '2026-10-22T00:00:00.000Z', discipline: 'run', totalDistance: 4.5 },
+    { date: localISO('2026-08-28'), discipline: 'run', totalDistance: 5 },
+    { date: localISO('2026-10-22'), discipline: 'run', totalDistance: 4.5 },
   ]
   const recentSessions = [planHistory[1]]
   const weekPhases = [
-    { weekStart: '2026-08-24T00:00:00.000Z', phase: 'buildUp' },
-    { weekStart: '2026-10-19T00:00:00.000Z', phase: 'buildUp' },
+    { weekStart: localISO('2026-08-24'), phase: 'buildUp' },
+    { weekStart: localISO('2026-10-19'), phase: 'buildUp' },
   ]
   const skeleton = buildPlanSkeleton({ profile: p, recentSessions, planHistory, weekPhases, checkIn: normalCheckIn, today })
   assert.equal(skeleton.planOriginDate, '2026-08-28')
@@ -417,27 +428,28 @@ test('healthy marathon progression uses the latest completed full week and does 
     trainingDaysPerWeek: 5,
     longSessionDays: [1, 3, 7],
     goalOverallTime: '3:30:00',
+    trainingFitness: { run: { maxSessionMinutes: 180 } },
     onboardingPriorStructuredPlan: true,
     onboardingConsistencyRating: 'Very consistent',
     onboardingAlreadyRuns: true,
     onboardingKnowsThreshold: true,
   })
-  const completed = (date, totalDistance) => ({ date: `${date}T00:00:00.000Z`, discipline: 'run', totalDistance, isCompleted: true })
-  const pending = (date, totalDistance) => ({ date: `${date}T00:00:00.000Z`, discipline: 'run', totalDistance, isCompleted: false })
+  const completed = (date, totalDistance) => ({ date: localISO(date), discipline: 'run', totalDistance, isCompleted: true })
+  const pending = (date, totalDistance) => ({ date: localISO(date), discipline: 'run', totalDistance, isCompleted: false })
   const planHistory = [
     completed('2026-08-28', 5), // partial Week 0: deliberately ignored for progression
     completed('2026-10-12', 5), completed('2026-10-13', 5), completed('2026-10-14', 6), completed('2026-10-15', 6), completed('2026-10-18', 12), // 34 km
     pending('2026-10-19', 3), pending('2026-10-20', 3), pending('2026-10-21', 3.5), pending('2026-10-22', 3.5), // incomplete 13 km must not drag target down
   ]
   const weekPhases = [
-    { weekStart: '2026-08-24T00:00:00.000Z', phase: 'buildUp' },
-    { weekStart: '2026-10-12T00:00:00.000Z', phase: 'buildUp' },
-    { weekStart: '2026-10-19T00:00:00.000Z', phase: 'buildUp' },
+    { weekStart: localISO('2026-08-24'), phase: 'buildUp' },
+    { weekStart: localISO('2026-10-12'), phase: 'buildUp' },
+    { weekStart: localISO('2026-10-19'), phase: 'buildUp' },
   ]
   const recentSessions = planHistory.filter((session) => session.date >= '2026-10-19')
   const skeleton = buildPlanSkeleton({ profile: p, recentSessions, planHistory, weekPhases, checkIn: normalCheckIn, today })
   assert.equal(skeleton.blockStart, '2026-10-26')
-  assert.deepEqual(skeleton.weeks.map((week) => week.targets.runKm), [37, 40.5])
+  assert.deepEqual(skeleton.weeks.map((week) => week.targets.runKm), [37, 37], 'v4 holds within-block volume; progression is reassessed next block')
   assert.ok(skeleton.weeks[0].targets.runKm >= 34)
   assert.ok(skeleton.weeks[1].targets.runKm >= skeleton.weeks[0].targets.runKm)
   assert.deepEqual(validateSkeleton(skeleton, p).errors, [])
@@ -507,24 +519,25 @@ test('healthy no-race marathon uses progressive load waves instead of a flat pha
     onboardingConsistencyRating: 'Very consistent',
     onboardingAlreadyRuns: true,
     onboardingKnowsThreshold: true,
+    trainingFitness: { run: { maxSessionMinutes: 180 } },
   })
 
   // Seed a plan that starts on Fri 28 Aug, then generate each two-week block
   // and feed the locked sessions back as completed history. This exercises
   // the real week-number/phase/progression pipeline over twelve full weeks.
-  const planHistory = [{ date: '2026-08-28T00:00:00.000Z', discipline: 'run', totalDistance: 5, isCompleted: true }]
-  const weekPhases = [{ weekStart: '2026-08-24T00:00:00.000Z', phase: 'buildUp' }]
+  const planHistory = [{ date: localISO('2026-08-28'), discipline: 'run', totalDistance: 5, isCompleted: true }]
+  const weekPhases = [{ weekStart: localISO('2026-08-24'), phase: 'buildUp' }]
   const observed = []
 
   for (let block = 0; block < 6; block++) {
     const skeleton = buildPlanSkeleton({ profile: p, recentSessions: planHistory.slice(-20), planHistory, weekPhases, checkIn: normalCheckIn, today })
     for (const week of skeleton.weeks) {
       observed.push({ week: week.weekNumber, phase: week.phase, km: week.targets.runKm, quality: week.sessions.filter((session) => session.role === 'quality').length })
-      weekPhases.push({ weekStart: `${week.weekStart}T00:00:00.000Z`, phase: week.phase })
+      weekPhases.push({ weekStart: localISO(week.weekStart), phase: week.phase })
       for (const session of week.sessions) {
         if (session.discipline !== 'run') continue
         planHistory.push({
-          date: `${session.date}T00:00:00.000Z`,
+          date: localISO(session.date),
           discipline: 'run',
           totalDistance: session.targetDistanceKm,
           isCompleted: true,
@@ -540,12 +553,12 @@ test('healthy no-race marathon uses progressive load waves instead of a flat pha
     'endurance', 'endurance', 'endurance', 'recovery',
   ])
   // Load weeks rise; recovery weeks deload and contain no quality sessions.
-  assert.ok(full[1].km > full[0].km)
+  assert.ok(full[1].km >= full[0].km)
   assert.ok(full[2].km > full[1].km)
   assert.ok(full[3].km < full[2].km)
   assert.equal(full[3].quality, 0)
   assert.ok(full[4].km >= full[2].km)
-  assert.ok(full[5].km > full[4].km)
+  assert.ok(full[5].km >= full[4].km)
   assert.ok(full[7].km < full[6].km)
   assert.equal(full[7].quality, 0)
   assert.ok(new Set(full.filter((entry) => entry.phase !== 'recovery').map((entry) => entry.km)).size > 3)
@@ -581,10 +594,11 @@ test('running race projection uses athlete threshold evidence without treating g
     runningDistance: 'marathon',
     goalOverallTime: '3:00:00',
     onboardingThresholdDetails: "4'30/km run threshold",
+    trainingFitness: { run: { value: 270, source: 'test', status: 'assessed', assessedOn: '2026-08-20' } },
   })
   const result = raceProjection(p, [], today)
   assert.equal(result.status, 'ready')
-  assert.equal(result.evidence, 'athlete threshold')
+  assert.equal(result.evidence, 'confirmed assessment')
   assert.ok(result.seconds > 3 * 3600, 'low endurance readiness should keep the estimate more conservative than the ambitious goal')
   assert.ok(result.upperSeconds > result.seconds)
   assert.ok(result.lowerSeconds < result.seconds)

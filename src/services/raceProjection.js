@@ -1,6 +1,7 @@
 import { asDate, startOfDay } from './dateUtils.js'
 import { derivedDistanceKm, isFullyCompleted, durationMinutes } from '../db/session.js'
 import { RUNNING_META, TRIATHLON_META } from '../db/raceDistance.js'
+import { normalizeFitness, dayGap } from './planning/fitness.js'
 
 const DAY_MS = 86400000
 
@@ -9,16 +10,6 @@ function median(values) {
   if (!xs.length) return null
   const i = Math.floor(xs.length / 2)
   return xs.length % 2 ? xs[i] : (xs[i - 1] + xs[i]) / 2
-}
-
-function parsePaceSeconds(raw, unit = 'km') {
-  if (!raw) return null
-  const text = String(raw).toLowerCase().replace(/[’′']/g, ':').replace(/[”″"]/g, '')
-  const unitPattern = unit === '100m' ? '(?:\\/\\s*100\\s*m|per\\s*100\\s*m)' : '(?:\\/\\s*km|per\\s*km)'
-  const match = text.match(new RegExp('(\\d{1,2})\\s*[:.]\\s*(\\d{2})\\s*' + unitPattern, 'i'))
-  if (!match) return null
-  const seconds = Number(match[1]) * 60 + Number(match[2])
-  return seconds > 0 ? seconds : null
 }
 
 function formatDuration(seconds) {
@@ -38,36 +29,27 @@ function completedSessions(sessions, discipline) {
   return sessions.filter((s) => s.discipline === discipline && isFullyCompleted(s))
 }
 
-function runThresholdEvidence(profile, sessions) {
-  const profileThreshold = parsePaceSeconds(profile.onboardingThresholdDetails, 'km')
-  const samples = []
-  for (const session of completedSessions(sessions, 'run').filter((s) => s.role === 'quality' || /threshold|tempo|interval|race/i.test(`${s.title ?? ''} ${s.intensity ?? ''}`))) {
-    for (const set of session.sets ?? []) {
-      if (!set.isCompleted) continue
-      const pace = parsePaceSeconds(set.paceOrPower, 'km')
-      const distanceKm = Number(set.distanceM) / 1000 * (set.setsCount ?? 1)
-      const duration = durationMinutes(set) * (set.setsCount ?? 1)
-      if (pace && (distanceKm >= 0.8 || duration >= 5)) samples.push(pace)
-    }
-  }
-  const workoutThreshold = samples.length ? median(samples.sort((a, b) => a - b).slice(0, Math.max(1, Math.ceil(samples.length * 0.5)))) : null
+function runThresholdEvidence(profile, sessions, today) {
+  const baseline = normalizeFitness(profile.trainingFitness).run
+  const valid = baseline.status === 'assessed' && baseline.assessedOn && dayGap(baseline.assessedOn, today) >= 0 && dayGap(baseline.assessedOn, today) <= 84
   return {
-    pace: workoutThreshold ?? profileThreshold,
-    source: workoutThreshold ? 'completed workouts' : profileThreshold ? 'athlete threshold' : null,
-    sampleCount: samples.length,
+    pace: valid ? baseline.value : null,
+    source: valid ? 'confirmed assessment' : null,
+    sampleCount: 0,
   }
 }
 
 function completedRunReadiness(sessions, targetKm, today = new Date()) {
-  const runs = completedSessions(sessions, 'run')
-  const longest = runs.reduce((max, s) => Math.max(max, derivedDistanceKm(s) ?? 0), 0)
+  const runs = completedSessions(sessions, 'run').filter((s) => dayGap(s.date, today) >= 0)
+  const measuredKm = (s) => s.workoutResult?.actualDistanceKm ?? (s.distanceIsEstimate ? 0 : derivedDistanceKm(s) ?? 0)
+  const longest = runs.reduce((max, s) => Math.max(max, measuredKm(s)), 0)
   const cutoff = startOfDay(today).getTime() - 28 * DAY_MS
   const recentKm = runs
     .filter((s) => {
       const date = asDate(s.date)
       return date && date.getTime() >= cutoff
     })
-    .reduce((sum, s) => sum + (derivedDistanceKm(s) ?? 0), 0)
+    .reduce((sum, s) => sum + measuredKm(s), 0)
   const weeklyAvg = recentKm / 4
   const longRatio = Math.min(1, longest / Math.max(1, targetKm * (targetKm >= 30 ? 0.7 : 0.8)))
   const volumeReference = targetKm >= 40 ? 45 : targetKm >= 20 ? 30 : targetKm >= 10 ? 20 : 12
@@ -76,8 +58,8 @@ function completedRunReadiness(sessions, targetKm, today = new Date()) {
   return { longest, weeklyAvg, readiness }
 }
 
-function runningProjection(profile, sessions, targetKm, offBikePenalty = 0) {
-  const evidence = runThresholdEvidence(profile, sessions)
+function runningProjection(profile, sessions, targetKm, offBikePenalty = 0, today = new Date()) {
+  const evidence = runThresholdEvidence(profile, sessions, today)
   if (!evidence.pace) return { status: 'building', reason: 'Complete sustained run work to establish current fitness.' }
 
   // Threshold pace is treated as approximately one-hour race pace, then
@@ -85,7 +67,7 @@ function runningProjection(profile, sessions, targetKm, offBikePenalty = 0) {
   // time itself as evidence.
   const thresholdDistanceKm = 3600 / evidence.pace
   let seconds = riegel(3600, thresholdDistanceKm, targetKm)
-  const readiness = completedRunReadiness(sessions, targetKm)
+  const readiness = completedRunReadiness(sessions, targetKm, today)
   const readinessPenalty = Math.max(0, 1 - readiness.readiness) * (targetKm >= 40 ? 0.16 : targetKm >= 20 ? 0.10 : 0.06)
   seconds *= 1 + readinessPenalty + offBikePenalty
 
@@ -99,21 +81,12 @@ function runningProjection(profile, sessions, targetKm, offBikePenalty = 0) {
   }
 }
 
-function swimProjection(profile, sessions, distanceKm) {
-  const profilePace = parsePaceSeconds(profile.onboardingThresholdDetails, '100m')
-  const samples = []
-  for (const session of completedSessions(sessions, 'swim')) {
-    for (const set of session.sets ?? []) {
-      if (!set.isCompleted) continue
-      const pace = parsePaceSeconds(set.paceOrPower, '100m')
-      const distance = Number(set.distanceM) * (set.setsCount ?? 1)
-      if (pace && distance >= 200) samples.push(pace)
-    }
-  }
-  const pace = median(samples) ?? profilePace
+function swimProjection(profile, sessions, distanceKm, today) {
+  const baseline = normalizeFitness(profile.trainingFitness).swim
+  const pace = baseline.status === 'assessed' && baseline.assessedOn && dayGap(baseline.assessedOn, today) >= 0 && dayGap(baseline.assessedOn, today) <= 84 ? baseline.value : null
   if (!pace) return { status: 'building' }
   const distanceFactor = distanceKm >= 3.8 ? 1.12 : distanceKm >= 1.9 ? 1.08 : distanceKm >= 1.5 ? 1.05 : 1.03
-  return { status: 'ready', seconds: pace * (distanceKm * 10) * distanceFactor, sampleCount: samples.length }
+  return { status: 'ready', seconds: pace * (distanceKm * 10) * distanceFactor, sampleCount: 0 }
 }
 
 function sessionDurationMinutes(session) {
@@ -125,10 +98,11 @@ function sessionDurationMinutes(session) {
   return match ? Number(match[1]) : null
 }
 
-function bikeProjection(sessions, targetKm) {
+function bikeProjection(sessions, targetKm, today) {
   const rides = completedSessions(sessions, 'bike').map((s) => {
-    const km = derivedDistanceKm(s) ?? 0
-    const minutes = sessionDurationMinutes(s)
+    const km = s.workoutResult?.actualDistanceKm ?? (s.distanceIsEstimate ? 0 : derivedDistanceKm(s) ?? 0)
+    const minutes = s.workoutResult?.actualDurationMinutes ?? (s.distanceIsEstimate ? null : sessionDurationMinutes(s))
+    if (dayGap(s.date, today) < 0) return { km: 0, speed: null }
     return { km, speed: km > 0 && minutes > 0 ? km / (minutes / 60) : null }
   }).filter((r) => r.speed && r.km >= Math.min(20, targetKm * 0.25))
   if (!rides.length) return { status: 'building' }
@@ -145,15 +119,15 @@ export function raceProjection(profile, sessions, today = new Date()) {
   if (profile.sport === 'running') {
     const targetKm = RUNNING_META[profile.runningDistance]?.distanceKm
     if (!targetKm) return { status: 'building', reason: 'Choose a race distance to build an estimate.' }
-    return runningProjection(profile, sessions, targetKm)
+    return runningProjection(profile, sessions, targetKm, 0, today)
   }
 
   const meta = TRIATHLON_META[profile.triathlonDistance]
   if (!meta) return { status: 'building', reason: 'Choose a triathlon distance to build an estimate.' }
-  const swim = swimProjection(profile, sessions, meta.legs.swim)
-  const bike = bikeProjection(sessions, meta.legs.bike)
+  const swim = swimProjection(profile, sessions, meta.legs.swim, today)
+  const bike = bikeProjection(sessions, meta.legs.bike, today)
   const runPenalty = profile.triathlonDistance === 'ironman' ? 0.12 : profile.triathlonDistance === 'halfIronman' ? 0.08 : profile.triathlonDistance === 'olympic' ? 0.05 : 0.03
-  const run = runningProjection(profile, sessions, meta.legs.run, runPenalty)
+  const run = runningProjection(profile, sessions, meta.legs.run, runPenalty, today)
   const missing = [swim.status !== 'ready' ? 'swim' : null, bike.status !== 'ready' ? 'bike' : null, run.status !== 'ready' ? 'run' : null].filter(Boolean)
   if (missing.length) return { status: 'building', reason: `Need more completed ${missing.join(', ')} data for a full triathlon estimate.`, legs: { swim, bike, run } }
 

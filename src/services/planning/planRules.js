@@ -1,4 +1,5 @@
 import { RUNNING_META, TRIATHLON_META } from '../../db/raceDistance.js'
+import { normalizeFitness, formatFitness } from './fitness.js'
 
 export const EXPERIENCE_RULES = {
   Beginner: { maxWeeklyIncrease: 0.05, minRestDays: 2, maxQualitySessions: 1 },
@@ -119,14 +120,14 @@ export function formatPace(secPerKm) {
 export function runningPaceTargets(profile, distanceKm = null, goalTime = null) {
   const km = distanceKm ?? RUNNING_META[profile.runningDistance]?.distanceKm
   const seconds = parseDurationSeconds(goalTime ?? profile.goalOverallTime)
-  if (!km || !seconds) return { racePace: null, easyPace: null, thresholdPace: null, intervalPace: null }
-  const race = seconds / km
-  const thresholdOffset = km > 22 ? 15 : km > 10 ? 12 : 10
+  const race = km && seconds ? seconds / km : null
+  const baseline = normalizeFitness(profile.trainingFitness).run
   return {
-    racePace: formatPace(race),
-    easyPace: formatPace(race + 60),
-    thresholdPace: formatPace(race + thresholdOffset),
-    intervalPace: formatPace(Math.max(1, race - 15)),
+    racePace: race == null ? null : formatPace(race),
+    easyPace: baseline.value == null ? null : formatPace(baseline.value * 1.25),
+    thresholdPace: baseline.value == null ? null : formatPace(baseline.value),
+    intervalPace: null,
+    baselineStatus: baseline.status,
   }
 }
 
@@ -135,12 +136,13 @@ export function triathlonNumericTargets(profile) {
   if (!meta) return {}
   const swimSeconds = parseDurationSeconds(profile.goalSwimTime)
   const bikeSeconds = parseDurationSeconds(profile.goalBikeTime)
-  const runSeconds = parseDurationSeconds(profile.goalRunTime)
-  const ftpMatch = String(profile.onboardingThresholdDetails ?? '').match(/(\d+(?:\.\d+)?)\s*w\b/i)
+  const fitness = normalizeFitness(profile.trainingFitness)
   return {
     swimPacePer100m: swimSeconds ? `${formatPace(swimSeconds / (meta.legs.swim * 10))?.replace('/km', '/100m')}` : null,
     bikeSpeedKph: bikeSeconds ? Math.round((meta.legs.bike / (bikeSeconds / 3600)) * 10) / 10 : null,
-    ftpWatts: ftpMatch ? Number(ftpMatch[1]) : null,
-    run: runSeconds ? runningPaceTargets(profile, meta.legs.run, profile.goalRunTime) : null,
+    ftpWatts: fitness.bike.value,
+    swimThreshold: fitness.swim.value == null ? null : formatFitness(fitness.swim.value, 'swim'),
+    fitness,
+    run: runningPaceTargets(profile, meta.legs.run, profile.goalRunTime || ' '),
   }
 }

@@ -1,6 +1,11 @@
 import { addDays, asDate, startOfDay, startOfWeekMon, toISODateString, weeksBetween } from '../dateUtils.js'
 import { jsDayToWeekdayValue } from '../../db/raceDistance.js'
 import { phaseForDate } from '../../db/weekPhase.js'
+import { placeStrengthWeek } from './strengthPlanning.js'
+import { applyEndurancePlanning } from './endurancePlanning.js'
+import { completedLoadWeeks, marathonBudget } from './seasonPlanning.js'
+import { parseDurationSeconds } from './planRules.js'
+import { RUNNING_META, TRIATHLON_META } from '../../db/raceDistance.js'
 import {
   EXPERIENCE_RULES,
   RUNNING_VOLUME_RANGES,
@@ -187,6 +192,11 @@ function availableWeekDates(weekDates, profile, minRestDays = 1) {
   return chosen
 }
 
+function longSessionDate(trainDates, profile) {
+  const preferred = new Set(profile.longSessionDays ?? [])
+  return trainDates.filter((date) => preferred.has(jsDayToWeekdayValue(date.getDay()))).at(-1) ?? trainDates.at(-1)
+}
+
 function sessionWasFullyCompleted(session) {
   const sets = Array.isArray(session?.sets) ? session.sets : []
   const hasExplicitSetStatus = sets.some((set) => typeof set?.isCompleted === 'boolean' || typeof set?.isSkipped === 'boolean')
@@ -199,27 +209,7 @@ function sessionWasFullyCompleted(session) {
 }
 
 function completedWeeklyDistances(planHistory, discipline, originDate, beforeDate) {
-  const firstFullMonday = snappedToMonday(originDate)
-  const cutoff = startOfDay(asDate(beforeDate))
-  const byWeek = new Map()
-  for (const session of planHistory ?? []) {
-    if (session.discipline !== discipline || session.totalDistance == null || !sessionWasFullyCompleted(session)) continue
-    const date = asDate(session.date)
-    if (!date) continue
-    const weekStart = startOfWeekMon(date)
-    const weekEnd = addDays(weekStart, 6)
-    // Partial Week 0 is intentionally excluded from progression. It is a
-    // scaled introduction, not evidence that the athlete's normal weekly
-    // capacity suddenly fell to a fraction of their target.
-    if (weekStart < firstFullMonday || weekEnd >= cutoff) continue
-    const km = discipline === 'swim' ? Number(session.totalDistance) / 1000 : Number(session.totalDistance)
-    if (!Number.isFinite(km)) continue
-    const key = dateKey(weekStart)
-    byWeek.set(key, (byWeek.get(key) ?? 0) + km)
-  }
-  return [...byWeek.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([weekStart, totalKm]) => ({ weekStart, totalKm }))
+  return completedLoadWeeks(planHistory ?? [], discipline, beforeDate, originDate)
 }
 
 function latestCompletedWeeklyDistance(planHistory, discipline, originDate, beforeDate) {
@@ -297,9 +287,17 @@ function runningWeek(profile, weekDates, phase, tier, checkIn, previousFullWeekK
   const paceTargets = runningPaceTargets(profile)
   const qualityCap = (checkIn.painLevel === 'significant' || phase === 'recovery') ? 0 : EXPERIENCE_RULES[tier].maxQualitySessions
   const qualityCount = Math.min(qualityCap, trainDates.length >= 4 ? 2 : 1)
-  const longDate = trainDates.at(-1)
+  const longDate = longSessionDate(trainDates, profile)
   const remaining = trainDates.filter((d) => d !== longDate)
-  const qualityDates = remaining.filter((_, i) => i < qualityCount)
+  // Choose feasible separated slots, not the first two consecutive dates
+  // only to discard one later. Tue/Thu also protect the preceding Sunday.
+  const qualityDates = []
+  const preference = [2, 4, 3, 1, 5, 6, 0]
+  for (const d of [...remaining].sort((a, b) => preference.indexOf(a.getDay()) - preference.indexOf(b.getDay()))) {
+    if (qualityDates.length >= qualityCount) break
+    if (Math.abs((d - longDate) / 86400000) < 1.9 || qualityDates.some(q => Math.abs((q - d) / 86400000) < 1.9)) continue
+    qualityDates.push(d)
+  }
   const easyDates = remaining.filter((d) => !qualityDates.includes(d))
   const longShare = trainDates.length <= 2 ? 0.55 : 0.38
   const qualityShare = qualityDates.length ? Math.min(0.28, 0.18 * qualityDates.length) : 0
@@ -316,13 +314,6 @@ function runningWeek(profile, weekDates, phase, tier, checkIn, previousFullWeekK
   qualityDates.forEach((d) => sessions.push(makeSession(d, 'run', 'quality', allocations[allocationIndex++], phase, { intensity: 'threshold', targetPaceOrPower: paceTargets.thresholdPace })))
   easyDates.forEach((d) => sessions.push(makeSession(d, 'run', 'easy', allocations[allocationIndex++], phase, { targetPaceOrPower: paceTargets.easyPace })))
 
-  if (!profile.excludeGymSessions && trainDates.length) {
-    const gymDate = easyDates[0] ?? qualityDates[0] ?? longDate
-    sessions.push(makeSession(gymDate, 'gym', 'strength', null, phase, { targetDurationMin: 35, sequence: 2 }))
-  } else if (profile.bodyweightOnlyStrength && trainDates.length) {
-    const gymDate = easyDates[0] ?? qualityDates[0] ?? longDate
-    sessions.push(makeSession(gymDate, 'gym', 'bodyweightStrength', null, phase, { targetDurationMin: 25, sequence: 2 }))
-  }
   return { sessions, targets: { runKm: target }, trainingDates: trainDates.map(dateKey) }
 }
 
@@ -354,7 +345,7 @@ function triWeek(profile, weekDates, phase, tier, checkIn, previousFullWeekTarge
     targets[`${disc}Km`] = t
   }
   if (!trainDates.length) return { sessions: [], targets, trainingDates: [] }
-  const longDate = trainDates.at(-1)
+  const longDate = longSessionDate(trainDates, profile)
   const sessions = [makeSession(longDate, 'brick', 'brick', null, phase, { intensity: 'Z2/steady', targetPaceOrPower: numeric.ftpWatts ? `bike Z2 relative to FTP ${numeric.ftpWatts}W; run ${numeric.run?.easyPace ?? 'easy/Z2'}` : (numeric.run?.easyPace ?? null) })]
 
   const other = trainDates.filter((d) => d !== longDate)
@@ -385,10 +376,6 @@ function triWeek(profile, weekDates, phase, tier, checkIn, previousFullWeekTarge
     const quality = i === 0 && !suppressQuality && tier !== 'Beginner'
     sessions.push(makeSession(d, 'run', quality ? 'quality' : 'easy', runAllocations[i + 1], phase, { intensity: quality ? 'threshold' : 'easy/Z2', sequence: i + 1, targetPaceOrPower: quality ? numeric.run?.thresholdPace : numeric.run?.easyPace }))
   })
-  if (!profile.excludeGymSessions || profile.bodyweightOnlyStrength) {
-    const strengthDate = swimDates[0] ?? placements[0]
-    sessions.push(makeSession(strengthDate, 'gym', profile.bodyweightOnlyStrength ? 'bodyweightStrength' : 'strength', null, phase, { targetDurationMin: profile.bodyweightOnlyStrength ? 25 : 35, sequence: 3 }))
-  }
   return { sessions, targets, trainingDates: trainDates.map(dateKey) }
 }
 
@@ -417,6 +404,20 @@ export function buildPlanSkeleton({ profile, recentSessions = [], planHistory = 
     const result = profile.sport === 'triathlon'
       ? triWeek(profile, weekDates, phase, tier, checkIn, progressionReference, weekNumber)
       : runningWeek(profile, weekDates, phase, tier, checkIn, progressionReference.runKm, weekNumber)
+    if (profile.sport === 'running' && profile.runningDistance === 'marathon' && profile.competitionDate) {
+      const budget = marathonBudget({ profile, history: planHistory, origin: originDate,
+        week: { calendarStart: dateKey(weekDates[0]), calendarEnd: dateKey(weekDates.at(-1)), partial: weekDates.length < 7, phase },
+        previousKm: latestCompletedLoadWeekDistance(planHistory, weekPhases, 'run', originDate, blockStart), checkIn })
+      const long = result.sessions.find(s => s.role === 'long')
+      const others = result.sessions.filter(s => s !== long)
+      const allocation = allocateRoundedTotal(Math.max(0, budget.km - (long ? budget.longKm : 0)), others.map(s => s.role === 'quality' ? 1.2 : 1), 0.5)
+      if (long) long.targetDistanceKm = budget.longKm
+      others.forEach((s, i) => { s.targetDistanceKm = allocation[i] })
+      result.sessions = result.sessions.filter(s => s.targetDistanceKm > 0)
+      result.sessions.forEach(s => { s.seasonAnchor = budget.anchor; s.distanceLed = s.role !== 'quality' })
+      result.targets.runKm = result.sessions.reduce((sum, s) => sum + s.targetDistanceKm, 0)
+      result.marathonPlan = budget
+    }
     // Only complete generated weeks become the progression reference for the
     // next generated week. A partial Week 0 must never suppress Week 1.
     if (weekDates.length === 7 && !['recovery', 'taper'].includes(phase)) {
@@ -437,8 +438,61 @@ export function buildPlanSkeleton({ profile, recentSessions = [], planHistory = 
       sessions,
     })
   }
+  // The event is a real calendar entry, not a normal long run. Race week
+  // training totals exclude the event; the following seven days are recovery.
+  if (profile.competitionDate) {
+    const raceDate = dateKey(profile.competitionDate)
+    for (const week of weeks) {
+      week.sessions = week.sessions.filter(s => s.date < raceDate || s.date > dateKey(addDays(asDate(profile.competitionDate), 7)))
+      for (const s of week.sessions) {
+        const days = Math.round((asDate(profile.competitionDate) - asDate(s.date)) / 86400000)
+        if (days > 0 && days <= 7 && s.role === 'long') { s.role = 'easy'; s.targetDistanceKm = Math.min(s.targetDistanceKm, 5) }
+        if (days > 0 && days <= 7 && s.discipline === 'brick') {
+          s.brickTargets = { bikeKm: Math.min(s.brickTargets.bikeKm, 10), runKm: Math.min(s.brickTargets.runKm, 2) }
+        }
+      }
+      if (raceDate >= week.calendarStart && raceDate <= week.calendarEnd) {
+        week.isRaceWeek = true
+        if (!week.trainingDates.includes(raceDate)) {
+          const removed = week.trainingDates.at(-1)
+          week.sessions = week.sessions.filter(s => s.date !== removed)
+          week.trainingDates = [...week.trainingDates.filter(d => d !== removed), raceDate].sort()
+        }
+        const discipline = profile.sport === 'running' ? 'run' : 'other'
+        const legs = profile.sport === 'running' ? [{ discipline: 'run', km: RUNNING_META[profile.runningDistance].distanceKm }]
+          : Object.entries(TRIATHLON_META[profile.triathlonDistance].legs).map(([discipline, km]) => ({ discipline, km }))
+        week.sessions.push({ skeletonId: `${raceDate}-race`, date: raceDate, discipline, role: 'race', isRace: true,
+          phase: week.phase, weekNumber: week.weekNumber, weekLabel: week.weekLabel,
+          targetDistanceKm: legs.reduce((sum, leg) => sum + leg.km, 0), targetDurationMin: null, isOptional: false,
+          endurancePrescription: { version: 1, id: `endurance-v1:${raceDate}-race`, discipline, purpose: 'race', family: 'event',
+            feedbackRequired: false, distanceIsEstimate: false, rationale: 'Race event. Goal time is an aspiration, not a required pace. Event distance is excluded from training-volume progression.',
+            steps: legs.map((leg, i) => ({ stepId: `${raceDate}:race:${i}`, stepType: 'race', discipline: leg.discipline,
+              distanceM: leg.km * 1000, durationSeconds: null, exercise: `Race ${leg.discipline}`, duration: null,
+              paceOrPower: 'Race effort according to current readiness; no forced goal pace', target: null, rest: null, setsCount: 1 })) } })
+      }
+      if (week.calendarStart > raceDate && week.calendarStart <= dateKey(addDays(asDate(profile.competitionDate), 7))) week.postRaceRecovery = true
+    }
+  }
+  // Endurance dates in both weeks are known before placing strength, so a
+  // Sunday lower-body session cannot ignore next Monday's key workout.
+  const runGoal = parseDurationSeconds(profile.sport === 'running' ? profile.goalOverallTime : profile.goalRunTime)
+  const swimGoal = parseDurationSeconds(profile.goalSwimTime)
+  const runKm = profile.sport === 'running' ? RUNNING_META[profile.runningDistance]?.distanceKm : TRIATHLON_META[profile.triathlonDistance]?.legs.run
+  const swimKm = TRIATHLON_META[profile.triathlonDistance]?.legs.swim
+  const endurancePlan = applyEndurancePlanning({ profile, weeks, history: planHistory, today, checkIn, qualityCap: EXPERIENCE_RULES[tier].maxQualitySessions,
+    goals: { run: runGoal && runKm ? runGoal / runKm : null, swim: swimGoal && swimKm ? swimGoal / (swimKm * 10) : null } })
+  const endurance = weeks.flatMap((week) => week.sessions)
+  const priorStrength = planHistory.filter((s) => s.discipline === 'gym'
+    && asDate(s.date) >= addDays(blockStart, -2) && asDate(s.date) < blockStart)
+  for (const week of weeks) {
+    const strength = placeStrengthWeek({ profile, week, checkIn, endurance, priorStrength, history: planHistory })
+    week.sessions.push(...strength.sessions)
+    week.strengthPlan = strength.strengthPlan
+    priorStrength.push(...strength.sessions)
+  }
   return {
-    version: 2,
+    version: 5,
+    endurancePlan,
     planOriginDate: dateKey(originDate),
     blockStart: dateKey(blockStart),
     fullBlockStart: dateKey(fullBlockStart),

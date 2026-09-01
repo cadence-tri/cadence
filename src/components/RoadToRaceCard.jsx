@@ -303,8 +303,8 @@ function RoadToRaceCardContent({ profile, sessions, weekPhases, onOpenProfile })
     },
     {
       value: data.runningTargets.thresholdPace,
-      label: 'Expected threshold pace',
-      detail: 'goal-derived',
+      label: 'Run threshold estimate',
+      detail: data.runningTargets.thresholdPace ? data.runningTargets.baselineStatus : 'effort-led calibration',
     },
   ]
 
@@ -312,7 +312,7 @@ function RoadToRaceCardContent({ profile, sessions, weekPhases, onOpenProfile })
     {
       value: data.triTargets.run?.thresholdPace,
       label: 'Run threshold pace',
-      detail: 'goal-derived',
+      detail: data.triTargets.run?.thresholdPace ? data.triTargets.run.baselineStatus : 'effort-led calibration',
     },
     {
       value: data.triTargets.ftpWatts ? `${data.triTargets.ftpWatts} W` : data.triTargets.bikeSpeedKph ? `${data.triTargets.bikeSpeedKph} km/h` : null,

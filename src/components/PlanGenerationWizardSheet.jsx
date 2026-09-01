@@ -1,8 +1,12 @@
 import { useState } from 'react'
 import { Wand2, Copy, Check } from 'lucide-react'
 import Sheet from './Sheet'
+import StrengthFrequencyField from './StrengthFrequencyField'
+import FitnessSettings from './FitnessSettings'
+import { normalizeStrengthFrequency } from '../services/planning/strengthPlanning'
 import { db } from '../db/db'
 import { preparePlanGeneration } from '../services/planning/planGeneration'
+import { readPendingCoach, savePendingCoach, clearPendingCoach } from '../services/planning/pendingCoach'
 import { mostRecentBlock } from '../services/planBlockTrigger'
 import { capacityWarningMessage } from '../services/trainingCapacityWarning'
 import { importMarkdown } from '../services/markdownImporter'
@@ -88,15 +92,24 @@ const inputClass = 'w-full p-3 rounded-xl bg-panel text-main-text outline-none'
  * `athleteBackgroundLines` in planPromptBuilder.js. */
 export default function PlanGenerationWizardSheet({ profile, allSessions, weekPhases, onClose }) {
   const isPlanEmpty = allSessions.length === 0
-  const [stage, setStage] = useState('note') // note | prompt | pasteBack | result
+  const [pending] = useState(() => readPendingCoach(profile))
+  const [stage, setStage] = useState(pending ? 'prompt' : 'note') // note | prompt | pasteBack | result
   const [note, setNote] = useState('')
-  const [prompt, setPrompt] = useState('')
-  const [skeleton, setSkeleton] = useState(null)
+  const [prompt, setPrompt] = useState(pending?.prompt ?? '')
+  const [skeleton, setSkeleton] = useState(pending?.skeleton ?? null)
+  const [savedPrompt, setSavedPrompt] = useState(!!pending)
   const [pastedReply, setPastedReply] = useState('')
   const [copied, setCopied] = useState(false)
   const [summary, setSummary] = useState(null)
   const [error, setError] = useState(null)
   const [showDetails, setShowDetails] = useState(false)
+  const [strengthSessionsPerWeek, setStrengthSessionsPerWeek] = useState(normalizeStrengthFrequency(profile.strengthSessionsPerWeek))
+  const [fitnessProfile, setFitnessProfile] = useState(profile)
+  const [assessment, setAssessment] = useState('offer')
+  const saveFitness = async (fields) => {
+    await db.profile.update(profile.id, fields)
+    setFitnessProfile((p) => ({ ...p, ...fields }))
+  }
 
   // Onboarding-only question state (unused for returning athletes).
   const [injuryHasHistory, setInjuryHasHistory] = useState(null)
@@ -117,8 +130,6 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
   const [knowsHeartRate, setKnowsHeartRate] = useState(null)
   const [restingHR, setRestingHR] = useState('')
   const [maxHR, setMaxHR] = useState('')
-  const [knowsThreshold, setKnowsThreshold] = useState(null)
-  const [thresholdDetails, setThresholdDetails] = useState('')
 
   // Equipment & access
   const [bikeSetup, setBikeSetup] = useState('')
@@ -152,6 +163,9 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
   const askGymQuestion = isPlanEmpty && !strengthPreferenceConfigured && !profile.excludeGymSessions
   const askBodyweightQuestion = isPlanEmpty && !strengthPreferenceConfigured && (profile.excludeGymSessions || includeGym === false)
   const isTriathlete = profile.sport === 'triathlon'
+  const effectiveGymExcluded = askGymQuestion ? includeGym === false : !!profile.excludeGymSessions
+  const effectiveBodyweight = askBodyweightQuestion ? bodyweightSessions === true : !!profile.bodyweightOnlyStrength
+  const strengthEnabled = !effectiveGymExcluded || effectiveBodyweight
 
   const buildPrompt = async () => {
     setError(null)
@@ -173,8 +187,8 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
           onboardingKnowsHeartRate: knowsHeartRate,
           onboardingRestingHR: knowsHeartRate ? restingHR.trim() : '',
           onboardingMaxHR: knowsHeartRate ? maxHR.trim() : '',
-          onboardingKnowsThreshold: knowsThreshold,
-          onboardingThresholdDetails: knowsThreshold ? thresholdDetails.trim() : '',
+          onboardingKnowsThreshold: Object.values(fitnessProfile.trainingFitness ?? {}).some((f) => f?.value > 0) || profile.onboardingKnowsThreshold || false,
+          onboardingThresholdDetails: profile.onboardingThresholdDetails ?? '',
           onboardingBikeSetup: isTriathlete ? bikeSetup : '',
           onboardingPoolDaysPerWeek: isTriathlete ? poolDaysPerWeek.trim() : '',
           onboardingOpenWaterAccess: isTriathlete ? openWaterAccess : null,
@@ -199,6 +213,10 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
         await db.profile.update(profile.id, onboardingFields)
       }
 
+      effectiveProfile = { ...effectiveProfile, trainingFitness: fitnessProfile.trainingFitness, fitnessHistory: fitnessProfile.fitnessHistory, bikePowerAvailable: fitnessProfile.bikePowerAvailable,
+        onboardingPoolDaysPerWeek: fitnessProfile.onboardingPoolDaysPerWeek || effectiveProfile.onboardingPoolDaysPerWeek, strengthSessionsPerWeek }
+      await db.profile.update(profile.id, { strengthSessionsPerWeek, trainingFitness: effectiveProfile.trainingFitness,
+        fitnessHistory: effectiveProfile.fitnessHistory, bikePowerAvailable: effectiveProfile.bikePowerAvailable, onboardingPoolDaysPerWeek: effectiveProfile.onboardingPoolDaysPerWeek })
       const block = mostRecentBlock(allSessions)
       const capacityWarningText = capacityWarningMessage({
         sport: effectiveProfile.sport,
@@ -214,11 +232,12 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
         recentSessions: block,
         planHistory: allSessions,
         weekPhases,
-        checkIn,
+        checkIn: { ...checkIn, assessment },
         capacityWarningText,
       })
       setSkeleton(generation.skeleton)
       setPrompt(generation.prompt)
+      setSavedPrompt(savePendingCoach({ prompt: generation.prompt, skeleton: generation.skeleton }))
       setCopied(false)
       setStage('prompt')
     } catch (e) {
@@ -239,6 +258,7 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
     setError(null)
     try {
       const result = await importMarkdown(markdown, skeleton ? { skeleton } : {})
+      clearPendingCoach()
       setSummary(result)
       setStage('result')
     } catch (e) {
@@ -399,18 +419,7 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
                   )}
                 </QuestionBlock>
 
-                <QuestionBlock label="Do you have a known FTP (bike) or threshold running pace?">
-                  <YesNoToggle value={knowsThreshold} onChange={setKnowsThreshold} />
-                  {knowsThreshold === true && (
-                    <input
-                      type="text"
-                      value={thresholdDetails}
-                      onChange={(e) => setThresholdDetails(e.target.value)}
-                      placeholder="e.g. 220W FTP, 4'30&quot;/km run threshold"
-                      className={inputClass}
-                    />
-                  )}
-                </QuestionBlock>
+                <p className="text-xs text-minor-text">Enter optional threshold/FTP/swim estimates in Fitness estimates &amp; capacity below. Blank values start with effort-led calibration.</p>
 
                 <SectionHeader label="Equipment & access" />
 
@@ -579,6 +588,9 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
               </>
             )}
 
+            {strengthEnabled && <StrengthFrequencyField value={strengthSessionsPerWeek} onChange={setStrengthSessionsPerWeek} />}
+            <FitnessSettings profile={fitnessProfile} onChange={saveFitness} sessions={allSessions} />
+            <label className="text-sm text-main-text">Assessment preference<select className={inputClass} value={assessment} onChange={(e) => setAssessment(e.target.value)}><option value="offer">One controlled checkpoint per discipline at each development phase</option><option value="skip">Skip phase checkpoints; keep ordinary training</option></select></label>
             <button onClick={buildPrompt} className="w-full py-2.5 rounded-xl bg-accent text-white font-semibold">
               Build check-in prompt to copy
             </button>
@@ -588,6 +600,23 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
         {stage === 'prompt' && (
           <>
             <h3 className="font-display font-bold text-xl text-main-text">Copy this into your AI coach</h3>
+            <p className="text-xs text-minor-text">{savedPrompt ? 'This pending prompt and schedule are saved on this device. Return here to import the reply.' : 'Keep this Coach window open until the reply is imported; device storage is unavailable.'}</p>
+            <p className="text-xs text-minor-text">Focused coaching context · {prompt.length.toLocaleString()} characters. Cadence keeps the complete records and prescribed steps locally; your coach receives relevant evidence and returns explanations and gym exercises. Paste the complete reply here.</p>
+            {prompt.length > 40000 && <p className="text-xs text-accent">This focused context is still unusually large, usually because of extensive athlete notes or gym history. Use a model with sufficient input/output capacity. Do not truncate the prompt or reply.</p>}
+            <details className="rounded-xl bg-panel p-3 text-sm text-main-text"><summary className="cursor-pointer font-semibold">What changes this block?</summary>
+              {Object.entries(skeleton?.endurancePlan?.decisions ?? {}).filter(([d]) => profile.sport === 'triathlon' || d === 'run').map(([d, decision]) => <p key={d} className="mt-2 text-xs">{d}: {decision.reason} {skeleton.endurancePlan.reviews[d]}</p>)}
+              {skeleton?.weeks.map((week) => <p key={week.weekLabel} className="mt-2 text-xs">{week.weekLabel}: {(week.progressionNotes ?? []).join(' ')}</p>)}
+            </details>
+            <div className="rounded-xl bg-panel p-3 flex flex-col gap-3" aria-live="polite">
+              <h4 className="font-semibold text-sm text-main-text">Your strength schedule</h4>
+              {skeleton?.weeks.map((week) => (
+                <div key={week.weekLabel}>
+                  <p className="text-sm text-main-text">{week.weekLabel}: {week.strengthPlan.scheduledSessions} session(s) · {week.strengthPlan.mode} (usual preference: {week.strengthPlan.requestedSessions})</p>
+                  {week.strengthPlan.messages.map((message) => <p key={message} className="text-xs text-main-text mt-1">{message}</p>)}
+                </div>
+              ))}
+              <button onClick={() => setStage('note')} className="text-accent text-sm font-semibold self-start">Adjust frequency or check-in</button>
+            </div>
             <p className="text-sm text-minor-text">Open your favorite AI, paste this whole message, and send it. Cadence has already locked the schedule; the AI is only filling in workout details.</p>
             <div className="max-h-64 overflow-y-auto p-2.5 rounded-xl bg-panel">
               <pre className="text-[11px] font-mono text-main-text whitespace-pre-wrap break-words">{prompt}</pre>
@@ -650,6 +679,9 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
             )}
             {summary.validation && summary.validation.errors.length === 0 && (
               <p className="text-sm text-accent">✓ Plan checked against the locked Cadence schedule</p>
+            )}
+            {summary.warnings.length > 0 && (
+              <p className="text-sm text-accent">⚠ Imported with {summary.warnings.length} adjustment(s) or warning(s). Review the details below.</p>
             )}
             {(summary.warnings.length > 0 || summary.failedItems.length > 0) && (
               <>

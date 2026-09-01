@@ -4,6 +4,8 @@ import Sheet from './Sheet'
 import ProfileAvatar from './ProfileAvatar'
 import ProfilePictureSheet from './ProfilePictureSheet'
 import DistanceAndGoalSection from './DistanceAndGoalSection'
+import StrengthFrequencyField from './StrengthFrequencyField'
+import FitnessSettings from './FitnessSettings'
 import { db } from '../db/db'
 import { currentBlockEnd } from '../services/planBlockTrigger'
 import { weekStreak as computeWeekStreak } from '../db/session'
@@ -162,11 +164,12 @@ export default function ProfileSheet({ profile, allSessions, onClose }) {
         </div>
 
         <DistanceAndGoalSection sport={local.sport} values={values} onChange={onDistanceGoalChange} />
+        <FitnessSettings profile={local} onChange={patch} sessions={allSessions} />
 
         {showingGoalNotice && (
           <div className="p-3 rounded-xl bg-accent/12 flex items-center justify-between gap-2">
             <p className="text-xs text-main-text">
-              Noted — your next generated 2 weeks will target this updated goal time and pace accordingly.
+              Noted — the next block will consider your updated goal while keeping prescriptions based on current fitness evidence.
             </p>
             <button onClick={() => setShowingGoalNotice(false)} className="text-xs font-semibold text-accent shrink-0">
               OK
@@ -219,6 +222,10 @@ export default function ProfileSheet({ profile, allSessions, onClose }) {
             </>
           )}
         </div>
+
+        {(!local.excludeGymSessions || local.bodyweightOnlyStrength) && (
+          <StrengthFrequencyField value={local.strengthSessionsPerWeek} onChange={(strengthSessionsPerWeek) => patch({ strengthSessionsPerWeek })} />
+        )}
 
         <div className="flex flex-col gap-2">
           <label className="flex items-center justify-between">

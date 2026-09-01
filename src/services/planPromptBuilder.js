@@ -7,6 +7,8 @@ import { disciplineDisplayName } from '../db/discipline'
 import { addDays, asDate, startOfDay, weeksBetween, parseImportDate } from './dateUtils'
 import { format } from 'date-fns'
 import { computeExperienceTier as computeExperienceTierShared } from './planning/planRules'
+import { requestedStrengthSessions } from './planning/strengthPlanning'
+import { buildCompactCoachPrompt } from './planning/coachProtocol.js'
 
 /** Snaps `date` forward to the Monday on or after it (start-of-day). Every
  * 2-week block is Monday-to-Sunday, per PLAN_SCHEMA.md. */
@@ -47,6 +49,7 @@ export function serializeSessions(sessions) {
       lines.push(`  perceived effort: ${session.perceivedEffort}/10 (${effortLabel(session.perceivedEffort)})`)
     }
     if (session.athleteFeedback) lines.push(`  feedback: ${session.athleteFeedback}`)
+    if (session.workoutResult) lines.push(`  athlete-entered structured result (not a new threshold): ${JSON.stringify(session.workoutResult)}`)
     if (session.notes) lines.push(`  notes: ${session.notes}`)
   }
   return lines.length ? lines.join('\n') : '(no prior sessions logged yet)'
@@ -155,7 +158,7 @@ export function athleteBackgroundLines(profile) {
   }
 
   if (profile.onboardingKnowsThreshold === true && profile.onboardingThresholdDetails?.trim()) {
-    lines.push(`Known threshold numbers: ${profile.onboardingThresholdDetails.trim()} — use this to anchor threshold/FTP-based prescriptions instead of estimating from goal time alone.`)
+    lines.push(`Legacy personal estimates (not verified; structured Cadence baselines take precedence): ${profile.onboardingThresholdDetails.trim()}. Never override the locked workout from this text.`)
   }
 
   // Equipment & access
@@ -205,10 +208,10 @@ export function athleteBackgroundLines(profile) {
  * stated preference. */
 export function gymRuleBullet(profile) {
   if (!profile.excludeGymSessions) {
-    return 'Every week includes at least one clear rest day, some mobility/stretching, and strength & conditioning worked in on my existing gym pattern — even for a running-only plan, per §7.6, S&C still stays in.'
+    return `Strength preference: ${requestedStrengthSessions(profile)} session(s) per full loading week. Use ONLY the strength dates, focus, frequency, and deload prescriptions in the locked schedule; do not infer frequency from historical plans. Include at least one clear rest day and mobility/stretching.`
   }
   if (profile.bodyweightOnlyStrength) {
-    return 'Every week includes at least one clear rest day and some mobility/stretching. The athlete has opted out of gym/weighted strength training — replace it entirely with bodyweight-only strength & conditioning (no equipment, or minimal/home equipment) in every week of the plan; never schedule a weighted gym session.'
+    return `Strength preference: ${requestedStrengthSessions(profile)} bodyweight-only session(s) per full loading week. Use ONLY the strength dates, focus, frequency, and deload prescriptions in the locked schedule. Never prescribe weighted gym work. Include at least one clear rest day and mobility/stretching.`
   }
   return 'Every week includes at least one clear rest day and some mobility/stretching. The athlete has opted out of gym/strength training entirely — do NOT include any gym or strength & conditioning sessions anywhere in this plan, for any week.'
 }
@@ -277,6 +280,7 @@ export function lifestyleRecoveryBiasLine(profile) {
 /** A single self-contained block of text, ready to paste into the athlete's
  * chosen AI coach. Ported from `PlanPromptBuilder.buildCheckInPrompt`. */
 export function buildCheckInPrompt({ profile, recentSessions, weekPhases, athleteNote, capacityWarningText, skeleton = null, checkIn = null }) {
+  if (skeleton?.version >= 5) return buildCompactCoachPrompt({ profile, recentSessions, skeleton, checkIn, athleteNote, capacityWarningText })
   const schema = schemaText
   const isFirstPlan = recentSessions.length === 0
   const lastLoggedDate = isFirstPlan
@@ -377,8 +381,11 @@ ${schema}
 Additional rules for this generation:
 ${rangeBullet}
 - Week numbering is a locked Cadence field. The governance document's §1 skeleton is formatting guidance only; NEVER infer week numbers from examples or placeholders — use Cadence's locked weekLabel exactly.
-- Every prescribed session must be fully explicit: exact sets/reps/distances/paces/power/rest for swim/bike/run/brick, and exact exercises with specific weights for gym. No vague placeholders like "technique + aerobic set."
+- For skeleton v4, endurancePrescription is authoritative over ALL older goal-derived pacing guidance. In the reply, include endurancePrescriptionId equal to its id (do NOT repeat the large endurancePrescription object). Copy its steps into sets in the same order, preserving stepId, stepType, durationSeconds, distanceM, target, duration, paceOrPower, rest and setsCount exactly. You may elaborate exercise labels with safe technique cues only; do not contradict locked numbers in prose. Never supply extra reps or weightKg on these steps. Effort-led means NO invented pace/power; it is an explicit prescription, not missing data. Preserve isOptional exactly. Explain Optional as skippable for tired/heavy legs, prioritizing rest with no make-up requirement.
+- Cadence owns workload and fitness progression. Never infer improved pace from a completion tick or personal notes. Never change the stored baseline, force the goal, or reinterpret calibration as a maximal test. Personal notes are context only. If a step is a drill, its pace is not fitness evidence. Swimming technique sessions require drill-specific cues plus full-stroke transfer; never add volume to satisfy an older weekly range.
+- Every prescribed session must be explicit. Follow the locked effort range when numerical pace/power is unavailable; gym exercises still require specific sets/reps/rest.
 - ${gymRule}
+- For each locked gym session, echo its strengthPrescription object EXACTLY in the JSON. Respect its fullBody/upperBody/lowerBody focus, equipment, durationMinutes (including core), workSetsMin/workSetsMax, and maxEffort. Include at least one main exercise followed by core/abs work as the final set entry (isCore: true); all main exercises need an integer setsCount within the prescribed bounds. Core entries may use fewer sets but must not exceed workSetsMax. State session duration, effort ceiling, exercise order, and recovery/taper adaptations in the session notes. No load progression or novel exercises in deload/taper. Adapt core exercises for reported injuries/conditions; do not force a painful finisher. Cadence omits strength entirely for a significant-pain check-in. Never add strength when none is scheduled.
 - Base exercise selection and load progression on my own historical log below, not generic defaults.
 - Cadence has already chosen the phase in the locked schedule below. Do not re-phase or move sessions; use the previous phase (${currentPhase}) only as coaching context.
 - Cadence has already sized weekly volume in the locked schedule below. Use my race distance, goal, and log to elaborate appropriate paces/power and workout structure without changing the locked target totals.
@@ -400,9 +407,18 @@ ${background.length ? `\nAthlete background (from onboarding — keep applying t
 My check-in note for this block:
 ${athleteNote?.trim() ? athleteNote.trim() : '(none — just continue the plan as progressed)'}
 
+${structuredCheckIn}
+
 The block I just completed, as logged in the app (prescribed work, completion status, and any per-session feedback):
 
-${serializeSessions(recentSessions)}${skeletonText}
+${serializeSessions(recentSessions)}
+
+Strength schedule adjustments:
+${skeleton?.weeks.map((week) => `${week.weekLabel}: ${week.strengthPlan?.scheduledSessions ?? 0} strength sessions. ${(week.strengthPlan?.messages ?? []).join(' ')}`).join('\n') ?? '(none)'}${skeletonText}
+
+CADENCE FITNESS AND PROGRESSION — authoritative, no baseline changes within this block:
+${JSON.stringify(skeleton?.endurancePlan ?? {})}
+${skeleton?.weeks.map((week) => `${week.weekLabel}: ${(week.progressionNotes ?? []).join(' ')}`).join('\n') ?? ''}
 
 Please generate ${isFirstPlan ? 'this first block' : 'the next 2-week block'} now.`
 }

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import WorkoutResultForm from './WorkoutResultForm'
 import { CheckCircle2, XCircle } from 'lucide-react'
 import { format } from 'date-fns'
 import Sheet from './Sheet'
@@ -13,6 +14,7 @@ import {
   sessionDistanceKmForDisplay,
   effortLabel,
   withAllSetsCompleted,
+  cleanNumber,
 } from '../db/session'
 import { startOfWeekMon, addDays, asDate, isSameDay } from '../services/dateUtils'
 import { db } from '../db/db'
@@ -92,7 +94,58 @@ function EditableSetRow({ set, discipline, onChange }) {
  * as fully addressed (see `db/session.js`'s `completionFraction`) and
  * shows up in Stats — skipped items themselves just don't contribute any
  * distance/duration/weight to those stats. */
-function SetRow({ set, color, onSetStatus }) {
+function loadActionLabel(action) {
+  return ({
+    establish: 'Log a baseline load',
+    hold: 'Repeat the established load',
+    addRep: 'Add one repetition',
+    increaseLoad: 'Small load increase',
+    reduce: 'Recovery load',
+  })[action] ?? null
+}
+
+function GymLoadControl({ set, onWeightChange }) {
+  const [editing, setEditing] = useState(false)
+  const suggestion = set.suggestedWeightKg == null ? null : `${cleanNumber(set.suggestedWeightKg)} kg suggested`
+  const action = loadActionLabel(set.loadAction)
+
+  if (editing) return (
+    <label className="w-full flex items-center gap-2 mt-1 text-xs text-minor-text">
+      Actual load
+      <input
+        autoFocus
+        type="number"
+        inputMode="decimal"
+        min="0"
+        step="0.5"
+        value={set.weightKg ?? ''}
+        onChange={(event) => onWeightChange(event.target.value === '' ? null : Number(event.target.value))}
+        onBlur={() => setEditing(false)}
+        onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+        className="w-20 border border-minor-text/30 rounded-lg bg-background px-2 py-1 text-sm text-main-text outline-none focus:border-accent"
+        aria-label={`Actual load for ${set.exercise || 'gym exercise'} in kilograms`}
+      />
+      kg
+    </label>
+  )
+
+  return (
+    <div className="w-full flex items-center justify-between gap-2 mt-1">
+      <span className="text-[11px] text-minor-text">
+        {[suggestion, action].filter(Boolean).join(' · ') || 'No load suggested yet'}
+      </span>
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        className="shrink-0 text-xs font-semibold text-accent"
+      >
+        {set.weightKg == null ? '+ Log load' : `${cleanNumber(set.weightKg)} kg · Edit`}
+      </button>
+    </div>
+  )
+}
+
+function SetRow({ set, color, discipline, showLoadControl, onSetStatus, onWeightChange }) {
   const setStatus = (status) => () => onSetStatus(status)
   const addressed = set.isCompleted || set.isSkipped
 
@@ -116,9 +169,13 @@ function SetRow({ set, color, onSetStatus }) {
       </button>
       <div className="flex-1 flex items-center gap-1.5 flex-wrap">
         <span className={`text-sm ${addressed ? 'line-through text-minor-text' : 'text-main-text'}`}>
-          {setSummary(set)}
+          {setSummary(showLoadControl ? { ...set, weightKg: null } : set)}
         </span>
         {set.isSkipped && <SkippedBadge />}
+        {set.notes && <p className="w-full text-xs text-minor-text">{set.notes}</p>}
+        {discipline === 'gym' && showLoadControl && (
+          <GymLoadControl set={set} onWeightChange={onWeightChange} />
+        )}
       </div>
     </div>
   )
@@ -208,8 +265,15 @@ export default function SessionDetailSheet({ session, onClose }) {
 
   const editSet = (index, newSet) => {
     const sets = local.sets.map((s, i) => (i === index ? newSet : s))
-    setLocal({ ...local, sets })
+    setLocal({ ...local, sets, workoutResult: null, prescriptionEdited: !!local.endurancePrescription })
     // Debounce-free write on every keystroke is fine at this scale.
+    db.sessions.update(local.id, { sets, workoutResult: null, prescriptionEdited: !!local.endurancePrescription })
+  }
+
+  const logGymLoad = (index, weightKg) => {
+    const sets = local.sets.map((set, i) => (i === index ? { ...set, weightKg } : set))
+    setLocal({ ...local, sets })
+    // Actual load is athlete evidence, not an edit to the prescribed plan.
     db.sessions.update(local.id, { sets })
   }
 
@@ -283,10 +347,15 @@ export default function SessionDetailSheet({ session, onClose }) {
                 isEditing ? (
                   <EditableSetRow key={i} set={set} discipline={local.discipline} onChange={(s) => editSet(i, s)} />
                 ) : (
-                  <SetRow key={i} set={set} color={color} onSetStatus={(status) => setStepStatus(i, status)} />
+                  <SetRow key={i} set={set} color={color} discipline={local.discipline}
+                    showLoadControl={local.discipline === 'gym' && local.strengthPrescription?.equipment !== 'bodyweight'}
+                    onSetStatus={(status) => setStepStatus(i, status)} onWeightChange={(weightKg) => logGymLoad(i, weightKg)} />
                 )
               )}
             </div>
+            {local.discipline === 'gym' && local.strengthPrescription?.equipment !== 'bodyweight' && (
+              <p className="mt-2 text-[11px] text-minor-text">Log the load actually used. Keep the same kg convention for the same exercise.</p>
+            )}
           </div>
         )}
 
@@ -297,6 +366,8 @@ export default function SessionDetailSheet({ session, onClose }) {
           </div>
         )}
 
+        {local.prescriptionEdited && local.originalPrescription && <details className="text-xs text-minor-text"><summary className="cursor-pointer">Original plan (before your edits)</summary><p className="mt-2">This modified workout remains in your log but does not automatically advance the original workout family.</p>{local.originalPrescription.map((s, i) => <p key={i} className="mt-1">{setSummary(s)}</p>)}</details>}
+        <WorkoutResultForm key={`${local.id}:${local.workoutResult?.recordedAt ?? 'unreported'}`} session={local} onSave={persist} />
         <div>
           <div className="text-xs font-semibold text-minor-text uppercase tracking-wide mb-2">Your feedback</div>
           <textarea
@@ -316,7 +387,7 @@ export default function SessionDetailSheet({ session, onClose }) {
               <div className="text-xs text-minor-text">{effortLabel(local.perceivedEffort)}</div>
             </div>
             <div className="rounded-xl bg-panel p-3">
-              <div className="text-xs text-minor-text">Total distance</div>
+              <div className="text-xs text-minor-text">{local.workoutResult?.actualDistanceKm ? 'Reported distance' : local.distanceIsEstimate ? 'Estimated distance' : 'Total distance'}</div>
               <div className="mt-1 text-2xl font-bold text-main-text">{distanceText}</div>
               <div className="text-xs text-minor-text">
                 {distanceKm == null ? 'Not applicable' : 'Session total'}

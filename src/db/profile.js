@@ -37,6 +37,12 @@ export function newProfileDefaults(overrides = {}) {
     // New profiles set this during creation; legacy profiles can still answer
     // the one-time onboarding question and become configured there.
     strengthPreferenceConfigured: false,
+    // Missing legacy values resolve to one; frequency is explicit in Profile
+    // and the generation check-in, never inferred from old AI plans.
+    strengthSessionsPerWeek: 1,
+    trainingFitness: {},
+    fitnessHistory: [],
+    bikePowerAvailable: null,
     // One-time onboarding answers, collected the first time the athlete
     // builds a plan (empty-log "It starts here!" flow). Persisted on the
     // profile (not just used for the first prompt) so every subsequent

@@ -8,6 +8,24 @@ Live at: **https://cadence-tri.github.io/cadence/** (once deployed — see below
 
 ## What it does
 
+- **Evidence-led endurance planning (scheduler v5)** — separate run, bike and
+  swim fitness estimates; conservative calibration; optional structured workout
+  results; explicit workload/race-specific stages; baseline changes confirmed by
+  the athlete. Profile and Coach expose compact Fitness estimates & capacity
+  controls. Existing calendar sessions are not rewritten.
+- **Season progression** — adaptive marathon peak ranges of 45–55, 55–65 or
+  75–85 km/week, selected using experience and capacity, not the goal alone.
+  Optional starting mileage and longest-run inputs anchor gradual progression;
+  long runs have their own progression, with recovery, taper and race protection.
+  These ranges are planning targets, not guaranteed outcomes or mandatory quotas.
+- **Phase checkpoints** — one controlled assessment per discipline in each
+  development phase, subject to recovery and placement constraints; none in
+  taper. Ordinary sessions develop workload and specificity between checkpoints.
+- **Swim capacity & technique** — volume fits swim ability, session time and
+  pool access instead of cramming an inflated weekly target into one session.
+  Two or more swims include one technique-focused session. Timed run/bike/brick
+  distances are labelled estimates, not measured performance.
+
 - **Daily log** — Overview dashboard (week at a glance, Road to Race
   progress, recovery-week nudges), an Upcoming list grouped by week with
   editable phase labels, and a browsable Training Log of past weeks.
@@ -17,10 +35,32 @@ Live at: **https://cadence-tri.github.io/cadence/** (once deployed — see below
   gym exercise progression, all filterable by training phase.
 - **Plan generation** — builds a complete "check-in" prompt (your race
   goal, availability, and recent training history) that you paste into
-  any Claude conversation; paste the reply back in and it's parsed and
-  imported automatically. No API key, no server round-trip.
+  a compatible AI conversation. A focused prompt includes athlete evidence,
+  concise prior endurance prescriptions, prior gym exercise/completion history and upcoming cue
+  targets without database metadata or duplicated endurance structures. The
+  complete records remain local. The reply supplies coaching text and gym
+  exercises while Cadence restores locked endurance prescriptions locally.
+  Coach v4 includes a readable response manifest for every scheduled session,
+  with an exact total and ordered ID checklist, so endurance sessions cannot be
+  hidden inside the packed transport context. Gym lines also fix each session's
+  focus, mode, exact workload, movement slots and one compact load action per
+  slot. Wrong/missing slots or session IDs are rejected; otherwise
+  set/repetition mistakes are corrected locally and reported.
+  Paste the reply into Coach for validation and import. The pending block is
+  retained on the same device when local storage is available. No API key.
+  Prompt size is displayed; model context limits still apply.
 - **Add activity** — log an ad-hoc session from Coach or directly from
   Training Log, with the selected log date prefilled.
+- **Strength preferences** — choose 1–4 sessions per week in Profile,
+  initial setup, or the Coach check-in. One is full body; two are upper/lower;
+  three add full body; four use two upper/lower pairs. Each ends with core.
+  Recovery uses lighter/shorter sessions; taper and race protection can reduce
+  frequency. Scheduling adjustments are shown before the prompt is copied.
+  Normal sessions prescribe exactly 3 sets for main and core exercises; recovery
+  and taper prescribe exactly 2. After actual loads are logged inline, Cadence
+  holds, adds a repetition, or suggests a small load increase only from repeated
+  controlled completions. Suggested and actual loads remain separate.
+  Preferences affect the next generated block, not existing calendar entries.
 - **Backup & Restore** — export your whole log as a JSON file, restore
   from one. This is also how you bring in training history from the
   **native iOS app** — its backup export uses the same JSON shape, so
@@ -49,6 +89,28 @@ path prefix used in production builds, so it just runs at the root.
 npm run build     # production build to dist/
 npm run preview   # serve the production build locally, at /cadence/
 ```
+
+## Verification and handoff
+
+See `HANDOFF_2026-09-01-COMPLETE-COACH.md` for the current release change,
+`HANDOFF_2026-09-01-STRENGTH-LOAD.md` for strength load progression,
+`HANDOFF_2026-09-01-GYM-CONTRACT.md` for the preceding gym response contract,
+`HANDOFF_2026-09-01-FOCUSED-COACH.md` for the prompt-size work, and
+`HANDOFF_2026-08-31-SEASON.md` for the scheduler limitations and next-session
+priorities. Earlier handoffs are historical snapshots.
+
+```bash
+TZ=Etc/UTC node --test tests/*.test.mjs
+TZ=Europe/Rome node --test tests/*.test.mjs
+TZ=America/Los_Angeles node --test tests/*.test.mjs
+node scripts/simulate-season.mjs simulation-results
+node scripts/verify-source.mjs
+```
+
+The source smoke diagnostic requires Node 24 and the installed Babel/React
+dependencies. It parses source and server-renders selected components; it is
+not a production build or browser test. Synthetic season reports test local
+scheduling, codec and import validation, not an external AI's response quality.
 
 ## Installing on your phone
 

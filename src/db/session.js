@@ -14,6 +14,7 @@ export function cleanNumber(n) {
 /** Parses strings like "20'", "5'", "20-25'" (averaged), "45 min" into
  * minutes. Returns null if nothing numeric could be found. */
 export function durationMinutes(set) {
+  if (Number.isFinite(set?.durationSeconds) && set.durationSeconds >= 0) return set.durationSeconds / 60
   if (!set?.duration) return null
   const normalized = String(set.duration).replace(/[–-]/g, ' ')
   const numbers = normalized
@@ -145,6 +146,7 @@ export function derivedDistanceKm(session) {
  * steps are marked done/skipped, show only completed distance so the card
  * reflects what was actually performed. */
 export function sessionDistanceKmForDisplay(session) {
+  if (Number.isFinite(session.workoutResult?.actualDistanceKm) && session.workoutResult.actualDistanceKm > 0) return session.workoutResult.actualDistanceKm
   const distanceBearingSets = (session.sets ?? []).filter((s) => s.distanceM != null)
   const hasAddressedDistance = distanceBearingSets.some((s) => s.isCompleted || s.isSkipped)
 

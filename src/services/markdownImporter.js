@@ -5,6 +5,8 @@ import { newSet, makeImportKey } from '../db/session.js'
 import { parseImportDate, startOfWeekMon, toISODateString } from './dateUtils.js'
 import { validateGeneratedPlan, mergeGeneratedWithSkeleton } from './planning/planValidator.js'
 import { deterministicPhaseForWeek } from './planning/planScheduler.js'
+import { fitnessFingerprint, evidenceFingerprint } from './planning/fitness.js'
+import { expandCoachReply } from './planning/coachProtocol.js'
 
 /** Extracts every ```session ... ``` fenced block from markdown text. Falls
  * back to scanning for bare (unfenced) JSON when no fences are found — see
@@ -136,25 +138,35 @@ function toStringOrNull(v) {
 function decodeSet(raw) {
   if (raw == null || typeof raw !== 'object') return null
   return newSet({
+    stepId: toStringOrNull(raw.stepId),
+    stepType: toStringOrNull(raw.stepType),
+    durationSeconds: toNumberOrNull(raw.durationSeconds),
+    target: raw.target && typeof raw.target === 'object' ? raw.target : null,
     exercise: toStringOrNull(raw.exercise),
     reps: toIntOrNull(raw.reps),
     setsCount: toIntOrNull(raw.setsCount),
     weightKg: toNumberOrNull(raw.weightKg),
+    suggestedWeightKg: toNumberOrNull(raw.suggestedWeightKg),
+    loadAction: toStringOrNull(raw.loadAction),
     distanceM: toNumberOrNull(raw.distanceM),
     duration: toStringOrNull(raw.duration),
     paceOrPower: toStringOrNull(raw.paceOrPower),
     rest: toStringOrNull(raw.rest),
     notes: toStringOrNull(raw.notes),
     isCompleted: raw.isCompleted === true,
+    isCore: raw.isCore === true,
+    slot: toStringOrNull(raw.slot),
   })
 }
 
 /** Parses markdown text against the existing log in memory (no DB access)
  * — pure and unit-testable. Returns the sessions/weekPhases to insert plus
  * an ImportSummary-shaped object. */
-export function parseMarkdown(markdown, existingSessions, existingWeekPhases) {
+export function parseMarkdown(markdown, existingSessions, existingWeekPhases, skeleton = null) {
+  const expanded = expandCoachReply(markdown, skeleton)
+  if (expanded) markdown = '```session\n' + JSON.stringify(expanded.sessions) + '\n```'
   const blocks = extractSessionBlocks(markdown)
-  const summary = { imported: 0, skippedDuplicates: 0, failedItems: [], warnings: [] }
+  const summary = { imported: 0, skippedDuplicates: 0, failedItems: [], warnings: [...(expanded?.warnings ?? [])] }
   if (blocks.length === 0) {
     summary.failedItems.push(
       "No training sessions found in this text. Make sure you pasted your coach's entire reply, including the JSON — it's fine if the ```session code-block formatting got stripped along the way (e.g. by some chat apps' copy behavior), the important part is that the JSON with each session's date/discipline/title is included somewhere in the pasted text."
@@ -163,6 +175,7 @@ export function parseMarkdown(markdown, existingSessions, existingWeekPhases) {
   }
 
   const existingKeys = new Set(existingSessions.map((s) => s.importKey))
+  const existingScheduleIds = new Set(existingSessions.map(s => s.schedulerSessionId ?? s.endurancePrescription?.id?.replace(/^endurance-v1:/, '')).filter(Boolean))
   const labelledWeekStarts = new Set(
     existingWeekPhases.map((wp) => toISODateString(startOfWeekMon(new Date(wp.weekStart))))
   )
@@ -221,6 +234,8 @@ export function parseMarkdown(markdown, existingSessions, existingWeekPhases) {
       const brickTargets = rawItem.brickTargets && typeof rawItem.brickTargets === 'object' ? rawItem.brickTargets : null
 
       const session = {
+        endurancePrescriptionId: toStringOrNull(rawItem.endurancePrescriptionId),
+        ...(rawItem.endurancePrescription && typeof rawItem.endurancePrescription === 'object' ? { endurancePrescription: rawItem.endurancePrescription } : {}),
         date: date.toISOString(),
         discipline: discipline ?? 'other',
         title,
@@ -233,8 +248,12 @@ export function parseMarkdown(markdown, existingSessions, existingWeekPhases) {
         weekLabel,
         isOptional,
         totalDistance,
+        ...(rawItem.strengthPrescription && typeof rawItem.strengthPrescription === 'object'
+          ? { strengthPrescription: rawItem.strengthPrescription } : {}),
+        ...(Array.isArray(rawItem.strengthLoadPlan) ? { strengthLoadPlan: rawItem.strengthLoadPlan } : {}),
         importKey: makeImportKey(date, discipline ?? 'other', title),
         ...(skeletonId ? { skeletonId } : {}),
+        ...(skeletonId ? { schedulerSessionId: skeletonId } : {}),
         ...(skeletonRole ? { skeletonRole } : {}),
         ...(brickTargets ? { brickTargets } : {}),
       }
@@ -256,13 +275,14 @@ export function parseMarkdown(markdown, existingSessions, existingWeekPhases) {
         }
       }
 
-      if (existingKeys.has(session.importKey)) {
+      if (existingKeys.has(session.importKey) || (skeletonId && existingScheduleIds.has(skeletonId))) {
         summary.skippedDuplicates += 1
         continue
       }
 
       newSessions.push(session)
       existingKeys.add(session.importKey)
+      if (skeletonId) existingScheduleIds.add(skeletonId)
       summary.imported += 1
     }
   }
@@ -278,10 +298,17 @@ export async function importMarkdown(markdown, options = {}) {
     db.weekPhases.toArray(),
     db.profile.get(PROFILE_ID),
   ])
-  let { newSessions, decodedSessions, newWeekPhases, summary } = parseMarkdown(markdown, existingSessions, existingWeekPhases)
+  let { newSessions, decodedSessions, newWeekPhases, summary } = parseMarkdown(markdown, existingSessions, existingWeekPhases, options.skeleton)
 
   if (options.skeleton) {
+    if (options.skeleton.version >= 4 && options.skeleton.endurancePlan?.fingerprint !== fitnessFingerprint(profile ?? {})) {
+      throw new Error('Your fitness settings, goals or availability changed after this prompt was built. Build a fresh prompt before importing; no sessions were changed.')
+    }
+    if (options.skeleton.version >= 4 && options.skeleton.endurancePlan?.evidenceFingerprint !== evidenceFingerprint(existingSessions, new Date(options.skeleton.endurancePlan.evidenceAsOf))) {
+      throw new Error('Workout evidence changed after this prompt was built. Build a fresh prompt before importing; no sessions were changed.')
+    }
     const validation = validateGeneratedPlan({ skeleton: options.skeleton, sessions: decodedSessions })
+    if (summary.failedItems.length) validation.errors.push('The response contains malformed or incomplete sessions. Paste the complete corrected reply.')
     if (validation.errors.length) {
       const error = new Error(`Cadence found problems in the generated plan:\n${validation.errors.map((x) => `• ${x}`).join('\n')}`)
       error.validation = validation

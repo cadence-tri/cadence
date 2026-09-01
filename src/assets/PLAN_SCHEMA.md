@@ -1,5 +1,63 @@
 # Training Plan Format — Governance Document
 
+## Current Coach contract (scheduler v5)
+
+New Coach prompts use `cadence-coach-v4`, not the expanded markdown template
+below. The remainder of this document is the legacy expanded-format reference;
+its full governance text is not appended to v5 prompts. The executable contract
+is in `src/services/planning/coachProtocol.js` and the local plan validator.
+
+The AI returns one JSON object with `protocol`, the exact `blockId`, and
+`sessions`. Every session has its short `id` (for example `S1`), `title`,
+optional `notes`, and either optional endurance `cues` or gym `sets`.
+Cadence reconstructs dates, phases, Optional flags, totals and exact endurance
+steps from the saved locked schedule; the AI must not echo or change them.
+Every upcoming session appears once in the readable `SESSION TASKS` response
+manifest. Its declared total, endurance/gym counts and ordered `EXPECTED IDS`
+list are authoritative. The AI must return exactly one response entry per line;
+the packed context supplies supporting evidence but is not used for task discovery.
+Each gym set must carry one exact movement `slot` from its readable GYM line.
+Upper body uses upperPush/upperPull/shoulder/core; lower body uses
+squat/hinge/singleLeg/core; full body uses
+squatOrHinge/upperPush/upperPull/singleLegOrCarry/core. Cadence orders these
+slots, derives the canonical title/focus and identifies core locally. Missing,
+duplicate or unknown slots block the whole import. If every slot is valid,
+Cadence restores the exact main/core set and repetition targets locally and
+shows a non-blocking import warning when it corrects them. Suggested loads are
+also restored locally and are never accepted from the AI. Optional status is
+never used to repair an invalid gym response.
+Missing/duplicate/unknown IDs, stale blocks and malformed replies are rejected.
+Generated sessions retain a stable scheduler ID for deduplication even if their
+titles change; legacy sessions still use date/discipline/title fallback matching.
+
+Input uses a purpose-built coaching view before applying the lossless transport
+codec. Cadence keeps the complete database records and immutable schedule
+locally. The AI receives all athlete profile/check-in data, athlete feedback,
+structured workout results, one semantic summary of each prior endurance
+prescription, completion counts, complete prior gym exercise sets, upcoming
+locked targets and exact cue step IDs/labels. Import IDs/timestamps,
+`originalPrescription`, duplicated completed endurance sets, internal
+fingerprints and old step-level AI cues are not coaching evidence and are not
+sent. The upcoming schedule embeds short response IDs directly in its sessions.
+
+The focused view is losslessly encoded for transport: `@D0` references
+dictionary D0; `["#R0", ...values]` uses ordered keys from schemas.R0;
+`["#P", "D0", index, value, ...]` copies a decoded base and replaces zero-based
+properties. A leading `!` escapes literal marker strings. Other arrays remain
+arrays. Large prompts are warned about, never silently truncated. Character
+count is not token count and compatibility with a specific external model is
+not guaranteed.
+
+Marathon peak ranges (45–55 / 55–65 / 75–85 km per week) are adaptive targets,
+not required quotas. Capacity, completion, recovery and explicit time limits
+can keep a plan below them. Long runs progress separately within the weekly
+budget. Assessments occur once per development phase per discipline when
+placement permits, never in recovery/taper; normal work develops between them.
+Race distance is excluded from training-volume progression. Goals never certify
+current fitness, and numerical baseline changes require athlete confirmation.
+
+---
+
 **Purpose:** every plan written in this project has two audiences at once —
 the athlete, reading human-friendly coaching prose, and Cadence, parsing the
 structured session JSON. This document is the single source of truth for that
@@ -160,6 +218,8 @@ Every item in a session's `sets` array is one prescribed line:
 | `setsCount` | int | mainly gym, also swim reps | The "3" in "3x8". |
 | `reps` | int | mainly gym | The "8" in "3x8". |
 | `weightKg` | number | gym | Load. Use a plain number, not a string — `65`, not `"65kg"`. |
+| `suggestedWeightKg` | number | generated gym | Cadence's current working suggestion. Kept separate from `weightKg`, which is the athlete's actual logged load. |
+| `loadAction` | string | generated gym | Local evidence-led action: establish, hold, addRep, increaseLoad, or reduce. |
 | `distanceM` | number | swim/run/bike | Distance of this rep/segment in **meters**, plain number. |
 | `duration` | string | all, esp. time-based work | Free text like `"20'"`, `"15'"`, `"20-25'"` (ranges get averaged by the app). Always use a trailing `'` for minutes and `"` for seconds, matching the athlete's existing shorthand. |
 | `paceOrPower` | string | endurance | E.g. `"5'40\"/km"`, `"180W"`, `"~2'00\"/100m"`. |
@@ -591,3 +651,96 @@ change this progression pattern.
   `Build-up` stretch and does not count as a full loading week or as evidence
   for the next week's progression baseline.
 
+### 7.11 Scheduler-owned strength frequency and deloads
+
+Profile `strengthSessionsPerWeek` is a target of 1–4 sessions per full loading
+week, defaulting to 1 for older profiles. Existing gym/bodyweight exclusion
+switches take precedence: opting out of all strength schedules zero.
+
+- 1 session: full body; 2: upper/lower; 3: upper/lower/full body;
+  4: two upper/lower pairs. Calendar order may change for placement.
+- Each hybrid gym session MUST echo the entire locked
+  `strengthPrescription` object exactly. This includes focus, equipment,
+  mode, duration (core included), work-set bounds, effort ceiling, and core
+  requirement. Copy it; do not invent another prescription.
+- End each gym session with a core/abs set entry marked `isCore: true`.
+  Include every locked movement slot exactly once. Normal sessions use exactly
+  3 sets for every retained main exercise and 3 core sets. Recovery/deload and
+  taper use exactly 2 main and 2 core sets; one-set exercises are never generated.
+  Adapt exercise selection for reported conditions; do not prescribe a painful exercise.
+- Normal: 35 min split / 45 min full-body gym sessions (shorter bodyweight
+  variants), effort <=7/10. Deload: 25 min split / 30 min full body, effort
+  <=6/10. Taper: at most one 20 min full-body session, effort <=5/10, with one
+  movement slot removed when needed to reduce total work rather than sets to one.
+  These are conservative app defaults, not individualized clinical rules.
+- `weightKg` is actual athlete evidence and begins null. The session page offers
+  inline load logging. Cadence will not invent a numerical baseline. For normal
+  weeks it holds an established load until two comparable controlled completions,
+  then uses double progression: repetitions advance toward 10 before a small
+  2.5% upper-body or 5% lower-body load increase resets the target to 8 reps.
+  Missing effort/recovery evidence holds progression. Deload/taper never progress
+  load and suggest about 10% less than the established load.
+- Recovery phase, fatigue, a too-hard previous block, or mild pain triggers
+  the deload prescription. Significant pain suppresses strength.
+- No strength on long/brick days, no third daily session, no extra training
+  days. No lower/full-body work the calendar day before key run/bike/brick
+  work, with at least two calendar days between lower/full-body sessions.
+  If sharing a quality day, endurance comes first; separate sessions where possible.
+- No strength in the final six days before the race, on race day, or for
+  seven days afterwards. Taper/recovery phase selection itself is unchanged.
+- Partial-week targets are scaled. If a target cannot fit, Cadence recomputes
+  a balanced smaller split and shows requested versus scheduled counts and
+  reasons. Never restore omitted sessions in the AI response.
+- Stored/backup sessions preserve strengthPrescription and sets[].isCore.
+  Legacy gym sessions lacking these fields remain readable; the new contract
+  is mandatory only when the locked skeleton supplies a strengthPrescription.
+
+### 7.12 Evidence-led endurance planning (skeleton v4)
+
+This section OVERRIDES older goal-derived pace formulas and generic weekly
+volume ranges whenever Cadence supplies an endurancePrescription. Race
+goals are objectives, not evidence of current fitness. Do not use the old
+8–10% comparison to override the locked prescription.
+
+- Cadence stores separate run pace (seconds/km), bike FTP (watts), and swim
+  threshold/CSS (seconds/100m) records. Personal estimates remain provisional.
+  A working target may approach an estimate after controlled feedback without
+  changing the stored baseline. Only athlete-confirmed assessment updates
+  change that baseline.
+- Missing fitness information means an explicit effort-led target. Never
+  invent numerical pace/power to fill it in. Cycling without confirmed power
+  equipment also uses effort, not goal-speed-to-watts conversion.
+- Cadence supplies separate development and race-specific workload families.
+  Repetitions, work duration and recovery are numeric, not inferred from text.
+  Stage progression requires comparable evidence. Baselines are frozen for
+  the whole block; load weeks hold within-block allocations. Recovery rotation
+  is unchanged. Recovery/taper reduces work, not the underlying fitness record.
+- Output endurancePrescriptionId equal to the locked prescription's id.
+  Do not duplicate the full prescription in the reply. Copy prescription.steps
+  into sets in the same order, preserving stepId, stepType, durationSeconds,
+  distanceM, target, duration, paceOrPower, rest and setsCount EXACTLY. Do not
+  add reps or weightKg. Coaching/technique cues may elaborate exercise labels
+  but must not contradict the targets. The importer validates actual steps
+  and reconstructs the complete prescription from the locked snapshot.
+- Swim volume is capped by discipline-specific experience, recent reported
+  capacity, continuous-swim comfort, time and pool access. Never cram an old
+  weekly target into fewer sessions. At least two swims means one technique
+  session with a larger drill share; a single swim mixes drills/full stroke.
+  Drill pace is never used as threshold evidence.
+- Quality spacing/caps apply across disciplines. Brick work remains easy,
+  with no inference of fresh-run threshold from off-bike performance.
+- Structured workout results are optional and athlete-entered. Completion,
+  actual pace/power, main-effort feel, repetitions, extended recovery and
+  context are distinct from the original prescription. Personal notes are
+  logging/coaching context only, never automatic numerical evidence.
+- Preserve isOptional exactly. For discretionary reductions: "Skip this
+  session if you feel unusually tired or heavy. Prioritize rest; there is no
+  need to make it up." Hard recovery/placement constraints require omission
+  or replacement, never an Optional loophole. Optional work still counts
+  against the maximum planned workload.
+- Timed run/bike/brick distances are explicitly estimates, not measurements.
+  Do not describe them as demonstrated performance. Swim distance includes
+  all prescribed distance-bearing steps. Never add hidden work.
+- Import rejects changed profile/evidence snapshots. Generation itself does
+  not advance state. Old plans remain readable; this contract applies only
+  when the supplied skeleton contains the new prescriptions.

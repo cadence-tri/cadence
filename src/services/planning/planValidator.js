@@ -1,5 +1,33 @@
 import { EXPERIENCE_RULES, DISTANCE_TOLERANCE, clampTrainingDays } from './planRules.js'
-import { asDate, toISODateString } from '../dateUtils.js'
+import { asDate, toISODateString, parseImportDate } from '../dateUtils.js'
+import { canonicalEnduranceSets } from './endurancePlanning.js'
+import { dayGap } from './fitness.js'
+import { strengthWeekPolicy, strengthFocuses, strengthPrescription, strengthPlacementAllowed } from './strengthPlanning.js'
+
+function equivalent(a, b) {
+  if (a === b) return true
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false
+  const keys = Object.keys(a)
+  return keys.length === Object.keys(b).length && keys.every((key) => equivalent(a[key], b[key]))
+}
+const samePrescription = equivalent
+export function validateEnduranceSession(session, spec) {
+  const errors = []
+  const p = spec.endurancePrescription
+  if (!p) return errors
+  if (session.endurancePrescription ? !equivalent(session.endurancePrescription, p) : session.endurancePrescriptionId !== p.id) errors.push('endurance prescription reference changed or missing')
+  const expected = canonicalEnduranceSets(p)
+  if (session.sets?.length !== expected.length) errors.push('prescribed step count changed')
+  for (const [index, step] of expected.entries()) {
+    const actual = session.sets?.[index]
+    for (const field of ['stepId', 'stepType', 'durationSeconds', 'distanceM', 'target', 'duration', 'paceOrPower', 'rest', 'setsCount']) {
+      if (!equivalent(actual?.[field] ?? null, step[field] ?? null)) errors.push(`step ${index + 1}: ${field} differs from the locked prescription`)
+    }
+    if (actual?.reps != null || actual?.weightKg != null) errors.push(`step ${index + 1}: unexpected repetitions/weight`)
+  }
+  if (!!session.isOptional !== !!spec.isOptional) errors.push('optional status changed')
+  return errors
+}
 
 const result = () => ({ errors: [], warnings: [], corrections: [] })
 const distinct = (xs) => new Set(xs).size
@@ -21,8 +49,42 @@ export function validateSkeleton(skeleton, profile) {
   const tier = skeleton.athleteState?.experienceTier ?? 'Intermediate'
   const rules = EXPERIENCE_RULES[tier] ?? EXPERIENCE_RULES.Intermediate
   const seenIds = new Set()
+  const allSessions = skeleton.weeks.flatMap((week) => week.sessions ?? [])
+  const endurance = allSessions.filter((s) => s.discipline !== 'gym' && s.discipline !== 'rest')
+  if (skeleton.version >= 4) {
+    const quality = endurance.filter((s) => s.role === 'quality')
+    for (let i = 0; i < quality.length; i++) {
+      if (quality.slice(i + 1).some((s) => Math.abs(dayGap(s.date, quality[i].date)) < 2)) out.errors.push('Endurance quality sessions must have at least two calendar days between them.')
+      if (endurance.some((s) => ['long', 'brick'].includes(s.role) && Math.abs(dayGap(s.date, quality[i].date)) < 2)) out.errors.push('Quality work conflicts with long/brick recovery spacing.')
+    }
+  }
   for (const week of skeleton.weeks) {
     const sessions = week.sessions ?? []
+    if (skeleton.version >= 3) {
+      const gym = sessions.filter((s) => s.discipline === 'gym')
+      const policy = strengthWeekPolicy(profile, week, skeleton.athleteState?.checkIn)
+      const plan = week.strengthPlan
+      if (!plan || plan.requestedSessions !== policy.requestedSessions || plan.targetSessions !== policy.targetSessions
+        || plan.mode !== policy.mode || plan.scheduledSessions !== gym.length || gym.length > policy.targetSessions) {
+        out.errors.push(`${week.weekLabel}: strength frequency/policy does not match the athlete's preferences and check-in.`)
+      }
+      if (gym.length < policy.targetSessions && !plan?.messages?.length) out.errors.push(`${week.weekLabel}: strength frequency was reduced without explanation.`)
+      const expectedFocuses = strengthFocuses(gym.length)
+      if (!expectedFocuses || [...expectedFocuses].sort().join() !== gym.map((s) => s.strengthPrescription?.focus).sort().join()) {
+        out.errors.push(`${week.weekLabel}: strength split does not match the scheduled frequency.`)
+      }
+      for (const session of gym) {
+        const prescription = session.strengthPrescription
+        const expected = strengthPrescription(profile, prescription?.focus, policy.mode)
+        if (!samePrescription(prescription, expected) || session.targetDurationMin !== expected.durationMinutes) {
+          out.errors.push(`${week.weekLabel}: strength prescription differs from the locked load policy.`)
+        }
+        if (!strengthPlacementAllowed({ date: session.date, focus: prescription?.focus, endurance,
+          strength: allSessions.filter((s) => s.discipline === 'gym' && s !== session), profile })) {
+          out.errors.push(`${week.weekLabel}: strength placement conflicts with endurance, strength spacing, daily capacity, or race protection.`)
+        }
+      }
+    }
     if (!Number.isInteger(week.weekNumber) || week.weekLabel !== `Week ${week.weekNumber}`) {
       out.errors.push(`${week.weekStart}: scheduler produced an invalid locked week number/label.`)
     }
@@ -40,19 +102,28 @@ export function validateSkeleton(skeleton, profile) {
     const quality = sessions.filter((s) => s.role === 'quality').length
     if (quality > rules.maxQualitySessions) out.errors.push(`${week.weekStart}: ${quality} quality sessions exceed ${tier} cap of ${rules.maxQualitySessions}.`)
     for (const s of sessions) {
+      if (s.endurancePrescription) {
+        const p = s.endurancePrescription
+        if (!p.steps?.length || p.steps.some((step) => (step.durationSeconds == null) === (step.distanceM == null)
+          || (step.durationSeconds ?? step.distanceM) <= 0)) out.errors.push(`${s.skeletonId}: invalid endurance work steps.`)
+        if (s.discipline === 'swim') {
+          const km = p.steps.reduce((sum, step) => sum + (step.distanceM ?? 0), 0) / 1000
+          if (Math.abs(km - s.targetDistanceKm) > 1e-6) out.errors.push(`${s.skeletonId}: swim steps do not sum to the allocated distance.`)
+        }
+      }
       if (!s.skeletonId || seenIds.has(s.skeletonId)) out.errors.push(`${week.weekStart}: duplicate or missing skeleton session id.`)
       seenIds.add(s.skeletonId)
       if (profile.sport === 'running' && ['swim', 'bike', 'brick'].includes(s.discipline)) out.errors.push(`${week.weekStart}: running-only plan contains ${s.discipline}.`)
       if (profile.excludeGymSessions && !profile.bodyweightOnlyStrength && s.discipline === 'gym') out.errors.push(`${week.weekStart}: gym session scheduled despite strength exclusion.`)
     }
-    if (profile.sport === 'triathlon' && !week.partial && !sessions.some((s) => s.discipline === 'brick')) out.errors.push(`${week.weekStart}: triathlon week has no brick session.`)
+    if (profile.sport === 'triathlon' && !week.partial && !week.isRaceWeek && !week.postRaceRecovery && !sessions.some((s) => s.discipline === 'brick')) out.errors.push(`${week.weekStart}: triathlon week has no brick session.`)
     const calendarDays = week.partial ? null : 7
     if (calendarDays) {
       const restDays = calendarDays - distinct(dates)
       if (restDays < rules.minRestDays) out.errors.push(`${week.weekStart}: only ${restDays} rest days; ${tier} requires at least ${rules.minRestDays}.`)
     }
     if (profile.sport === 'running' && Number.isFinite(week.targets?.runKm)) {
-      const allocated = sessions.filter((s) => s.discipline === 'run').reduce((sum, s) => sum + (Number(s.targetDistanceKm) || 0), 0)
+      const allocated = sessions.filter((s) => s.discipline === 'run' && !s.isRace).reduce((sum, s) => sum + (Number(s.targetDistanceKm) || 0), 0)
       if (Math.abs(allocated - week.targets.runKm) > 1e-6) out.errors.push(`${week.weekStart}: allocated run distance does not match the weekly target.`)
     }
     if (profile.sport === 'triathlon') {
@@ -123,6 +194,23 @@ export function validateGeneratedPlan({ skeleton, sessions }) {
     if (s.discipline !== spec.discipline) out.errors.push(`${s.skeletonId}: discipline changed from ${spec.discipline} to ${s.discipline}.`)
     if (s.skeletonRole !== spec.role) out.errors.push(`${s.skeletonId}: session role must remain ${spec.role}.`)
     if (s.weekLabel !== spec.weekLabel) out.errors.push(`${s.skeletonId}: weekLabel must remain "${spec.weekLabel}".`)
+    if (skeleton.version >= 4 && !!s.isOptional !== !!spec.isOptional) out.errors.push(`${s.skeletonId}: optional status must remain locked.`)
+    out.errors.push(...validateEnduranceSession(s, spec).map((message) => `${s.skeletonId}: ${message}.`))
+    if (spec.strengthPrescription) {
+      const prescription = spec.strengthPrescription
+      if (!samePrescription(s.strengthPrescription, prescription)) {
+        out.errors.push(`${s.skeletonId}: strengthPrescription must match the locked focus, equipment, duration, core and deload rules.`)
+      }
+      const sets = s.sets ?? []
+      const expectedSlots = prescription.exerciseSlots ?? []
+      if (sets.length !== expectedSlots.length || sets.some((set, index) => set.slot !== expectedSlots[index]
+        || set.isCore !== (set.slot === 'core'))) {
+        out.errors.push(`${s.skeletonId}: strength slots must be exactly ${expectedSlots.join(', ')} in order, with core last.`)
+      }
+      if (sets.some((set) => set.setsCount !== (set.isCore ? prescription.coreSets : prescription.workSetsMin))) {
+        out.errors.push(`${s.skeletonId}: strength work must use exactly ${prescription.workSetsMin} sets per main exercise and ${prescription.coreSets} core sets.`)
+      }
+    }
     if (distanceMismatch(spec.targetDistanceKm, s)) out.errors.push(`${s.skeletonId}: total distance differs from the locked target by more than the allowed tolerance.`)
     if (spec.discipline === 'brick') {
       const bike = Number(s.brickTargets?.bikeKm)
@@ -147,12 +235,24 @@ export function mergeGeneratedWithSkeleton({ skeleton, sessions }) {
       : spec.discipline === 'swim' ? spec.targetDistanceKm * 1000 : spec.targetDistanceKm
     return {
       ...s,
-      date: `${spec.date}T00:00:00.000Z`,
+      date: parseImportDate(spec.date).toISOString(),
       discipline: spec.discipline,
+      isRace: !!spec.isRace,
       totalDistance,
       phase: spec.phase,
       weekLabel: spec.weekLabel,
       isOptional: spec.isOptional,
+      notes: [spec.optionalReason, s.notes].filter(Boolean).join('\n\n'),
+      ...(spec.strengthPrescription ? { strengthPrescription: spec.strengthPrescription } : {}),
+      ...(spec.strengthLoadPlan ? { strengthLoadPlan: spec.strengthLoadPlan } : {}),
+      ...(spec.endurancePrescription ? {
+        endurancePrescription: spec.endurancePrescription,
+        originalPrescription: canonicalEnduranceSets(spec.endurancePrescription),
+        sets: canonicalEnduranceSets(spec.endurancePrescription).map((step, index) => ({ ...step, exercise: s.sets[index]?.exercise ?? step.exercise, notes: s.sets[index]?.notes ?? null })),
+        workoutResult: null,
+        distanceIsEstimate: spec.endurancePrescription.distanceIsEstimate,
+        notes: [spec.endurancePrescription.rationale, spec.optionalReason, s.notes].filter(Boolean).join('\n\n'),
+      } : {}),
     }
   })
 }

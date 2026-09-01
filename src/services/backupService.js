@@ -2,6 +2,9 @@ import { db, PROFILE_ID } from '../db/db.js'
 import { asDate, startOfWeekMon, startOfDay } from './dateUtils.js'
 import { newProfileDefaults } from '../db/profile.js'
 import { deterministicPhaseForWeek } from './planning/planScheduler.js'
+import { normalizeStrengthFrequency } from './planning/strengthPlanning.js'
+import { normalizeFitness, normalizeWorkoutResult } from './planning/fitness.js'
+import { makeImportKey } from '../db/session.js'
 
 // The file written by "Export backup" / read by "Import backup" — and,
 // v1/v2 session/week-phase data is compatible with the native iOS backup
@@ -37,8 +40,17 @@ export async function encodeBackup() {
       perceivedEffort: s.perceivedEffort ?? null,
       importedAt: asDate(s.importedAt)?.toISOString() ?? new Date().toISOString(),
       weekLabel: s.weekLabel ?? null,
+      phase: s.phase ?? s.endurancePrescription?.trainingPhase ?? null,
       isOptional: !!s.isOptional,
       totalDistance: s.totalDistance ?? null,
+      strengthPrescription: s.strengthPrescription ?? null,
+      endurancePrescription: s.endurancePrescription ?? null,
+      isRace: !!s.isRace,
+      schedulerSessionId: s.schedulerSessionId ?? null,
+      originalPrescription: s.originalPrescription ?? null,
+      prescriptionEdited: !!s.prescriptionEdited,
+      workoutResult: s.workoutResult ?? null,
+      distanceIsEstimate: !!s.distanceIsEstimate,
     })),
     weekPhases: weekPhases.map((wp) => ({
       weekStart: asDate(wp.weekStart).toISOString(),
@@ -61,6 +73,10 @@ export function normalizeProfileLoose(raw) {
   profile.excludeGymSessions = !!profile.excludeGymSessions
   profile.bodyweightOnlyStrength = !!profile.bodyweightOnlyStrength
   profile.strengthPreferenceConfigured = !!profile.strengthPreferenceConfigured
+  profile.strengthSessionsPerWeek = normalizeStrengthFrequency(profile.strengthSessionsPerWeek)
+  profile.trainingFitness = normalizeFitness(profile.trainingFitness)
+  profile.bikePowerAvailable = typeof profile.bikePowerAvailable === 'boolean' ? profile.bikePowerAvailable : null
+  profile.fitnessHistory = Array.isArray(profile.fitnessHistory) ? profile.fitnessHistory : []
   return profile
 }
 
@@ -138,11 +154,21 @@ export async function restoreBackup(fileText) {
       isCompleted: !!dto.isCompleted,
       athleteFeedback: dto.athleteFeedback ?? '',
       perceivedEffort: normalizePerceivedEffort(dto.perceivedEffort),
+      endurancePrescription: dto.endurancePrescription && typeof dto.endurancePrescription === 'object' ? dto.endurancePrescription : null,
+      isRace: !!dto.isRace || dto.endurancePrescription?.purpose === 'race',
+      schedulerSessionId: typeof dto.schedulerSessionId === 'string' ? dto.schedulerSessionId : null,
+      originalPrescription: Array.isArray(dto.originalPrescription) ? dto.originalPrescription : null,
+      prescriptionEdited: !!dto.prescriptionEdited,
+      workoutResult: normalizeWorkoutResult(dto.workoutResult),
+      distanceIsEstimate: !!dto.distanceIsEstimate,
       importedAt: asDate(dto.importedAt)?.toISOString() ?? new Date().toISOString(),
       weekLabel: dto.weekLabel ?? null,
+      phase: dto.phase ?? dto.endurancePrescription?.trainingPhase ?? null,
       isOptional: !!dto.isOptional,
       totalDistance: dto.totalDistance ?? null,
-      importKey: `${date.toISOString().slice(0, 10)}|${discipline}|${dto.title ?? ''}`,
+      strengthPrescription: dto.strengthPrescription && typeof dto.strengthPrescription === 'object' && !Array.isArray(dto.strengthPrescription)
+        ? dto.strengthPrescription : null,
+      importKey: makeImportKey(date, discipline, dto.title ?? ''),
     }
   })
 

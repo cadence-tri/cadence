@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Camera } from 'lucide-react'
 import ProfileAvatar from '../components/ProfileAvatar'
 import DistanceAndGoalSection from '../components/DistanceAndGoalSection'
+import StrengthFrequencyField from '../components/StrengthFrequencyField'
 import { db } from '../db/db'
 import { newProfileDefaults } from '../db/profile'
 
@@ -21,6 +22,7 @@ export default function LoginScreen() {
   const [hasCompetition, setHasCompetition] = useState(false)
   const [excludeGymSessions, setExcludeGymSessions] = useState(false)
   const [bodyweightOnlyStrength, setBodyweightOnlyStrength] = useState(false)
+  const [strengthSessionsPerWeek, setStrengthSessionsPerWeek] = useState(1)
   const [competitionName, setCompetitionName] = useState('')
   const [competitionDate, setCompetitionDate] = useState(() => {
     const d = new Date()
@@ -59,6 +61,7 @@ export default function LoginScreen() {
       excludeGymSessions,
       bodyweightOnlyStrength: excludeGymSessions && bodyweightOnlyStrength,
       strengthPreferenceConfigured: true,
+      strengthSessionsPerWeek,
       ...values,
       goalOverallTime: values.goalOverallTime.trim(),
       goalSwimTime: values.goalSwimTime.trim(),
@@ -158,6 +161,10 @@ export default function LoginScreen() {
             </>
           )}
         </div>
+
+        {(!excludeGymSessions || bodyweightOnlyStrength) && (
+          <StrengthFrequencyField value={strengthSessionsPerWeek} onChange={setStrengthSessionsPerWeek} />
+        )}
 
         <div className="flex flex-col gap-2">
           <label className="flex items-center justify-between">

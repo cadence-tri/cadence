@@ -49,6 +49,7 @@ export function parseImportDate(raw) {
 export function asDate(value) {
   if (value instanceof Date) return value
   if (!value) return null
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return parseImportDate(value)
   const d = new Date(value)
   return isNaN(d) ? null : d
 }

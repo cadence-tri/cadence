@@ -25,7 +25,7 @@ test('pending compact plans survive reopening but reject changed profiles and co
   const plan = { skeleton, prompt: buildCompactCoachPrompt({ profile, skeleton }) }
   assert.equal(savePendingCoach(plan, storage), true)
   assert.deepEqual(readPendingCoach(profile, storage), plan)
-  assert.equal(savePendingCoach({ ...plan, prompt: plan.prompt.replace('cadence-coach-v4', 'cadence-coach-v3') }, storage), true)
+  assert.equal(savePendingCoach({ ...plan, prompt: plan.prompt.replace('cadence-coach-v5', 'cadence-coach-v4') }, storage), true)
   assert.equal(readPendingCoach(profile, storage), null)
   assert.equal(savePendingCoach(plan, storage), true)
   assert.equal(readPendingCoach({ ...profile, goalOverallTime: '3:10:00' }, storage), null)

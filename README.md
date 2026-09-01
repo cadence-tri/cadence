@@ -40,7 +40,7 @@ Live at: **https://cadence-tri.github.io/cadence/** (once deployed — see below
   targets without database metadata or duplicated endurance structures. The
   complete records remain local. The reply supplies coaching text and gym
   exercises while Cadence restores locked endurance prescriptions locally.
-  Coach v4 includes a readable response manifest for every scheduled session,
+  Coach v5 includes a readable response manifest for every scheduled session,
   with an exact total and ordered ID checklist, so endurance sessions cannot be
   hidden inside the packed transport context. Gym lines also fix each session's
   focus, mode, exact workload, movement slots and one compact load action per
@@ -59,7 +59,8 @@ Live at: **https://cadence-tri.github.io/cadence/** (once deployed — see below
   Normal sessions prescribe exactly 3 sets for main and core exercises; recovery
   and taper prescribe exactly 2. After actual loads are logged inline, Cadence
   holds, adds a repetition, or suggests a small load increase only from repeated
-  controlled completions. Suggested and actual loads remain separate.
+  controlled normal-week completions. Suggested and actual loads remain separate;
+  recovery/taper logs never replace the normal working baseline.
   Preferences affect the next generated block, not existing calendar entries.
 - **Backup & Restore** — export your whole log as a JSON file, restore
   from one. This is also how you bring in training history from the
@@ -89,28 +90,6 @@ path prefix used in production builds, so it just runs at the root.
 npm run build     # production build to dist/
 npm run preview   # serve the production build locally, at /cadence/
 ```
-
-## Verification and handoff
-
-See `HANDOFF_2026-09-01-COMPLETE-COACH.md` for the current release change,
-`HANDOFF_2026-09-01-STRENGTH-LOAD.md` for strength load progression,
-`HANDOFF_2026-09-01-GYM-CONTRACT.md` for the preceding gym response contract,
-`HANDOFF_2026-09-01-FOCUSED-COACH.md` for the prompt-size work, and
-`HANDOFF_2026-08-31-SEASON.md` for the scheduler limitations and next-session
-priorities. Earlier handoffs are historical snapshots.
-
-```bash
-TZ=Etc/UTC node --test tests/*.test.mjs
-TZ=Europe/Rome node --test tests/*.test.mjs
-TZ=America/Los_Angeles node --test tests/*.test.mjs
-node scripts/simulate-season.mjs simulation-results
-node scripts/verify-source.mjs
-```
-
-The source smoke diagnostic requires Node 24 and the installed Babel/React
-dependencies. It parses source and server-renders selected components; it is
-not a production build or browser test. Synthetic season reports test local
-scheduling, codec and import validation, not an external AI's response quality.
 
 ## Installing on your phone
 

@@ -162,6 +162,69 @@ test('strength progression holds without effort evidence and deload only reduces
   assert.equal(recovery.suggestedWeightKg, 36)
 })
 
+test('logged deload loads never ratchet down the normal baseline or repetition stage', () => {
+  const checkIn = { recovery: 'normal', previousBlockLoad: 'aboutRight', painLevel: 'none' }
+  const normalPrescription = strengthPrescription(profile(), 'lowerBody', 'normal')
+  const deloadPrescription = strengthPrescription(profile(), 'lowerBody', 'deload')
+  const normal55 = gymEvidence({ date: '2026-09-02', weightKg: 55, reps: 9 })
+  normal55.sets[0].slot = 'squat'
+  const deload495 = gymEvidence({ date: '2026-09-30', weightKg: 49.5, reps: 8, mode: 'deload' })
+  deload495.sets[0].slot = 'squat'
+
+  const resumed = strengthLoadPlan({ prescription: normalPrescription, history: [normal55, deload495], checkIn })[0]
+  assert.equal(resumed.fromWeightKg, 55)
+  assert.equal(resumed.suggestedWeightKg, 55)
+  assert.equal(resumed.targetReps, 9)
+
+  const nextDeload = strengthLoadPlan({ prescription: deloadPrescription, history: [normal55, deload495], checkIn })[0]
+  assert.equal(nextDeload.fromWeightKg, 55)
+  assert.equal(nextDeload.suggestedWeightKg, 49.5)
+  assert.equal(nextDeload.targetReps, 8)
+})
+
+test('two controlled normal top-range completions increase load despite intervening deload logs', () => {
+  const checkIn = { recovery: 'normal', previousBlockLoad: 'aboutRight', painLevel: 'none' }
+  const prescription = strengthPrescription(profile(), 'lowerBody', 'normal')
+  const history = [
+    gymEvidence({ date: '2026-09-02', weightKg: 55, reps: 10 }),
+    gymEvidence({ date: '2026-09-09', weightKg: 49.5, reps: 8, mode: 'deload' }),
+    gymEvidence({ date: '2026-09-16', weightKg: 55, reps: 10 }),
+  ]
+  history.forEach(session => { session.sets[0].slot = 'squat' })
+  const next = strengthLoadPlan({ prescription, history, checkIn })[0]
+  assert.equal(next.action, 'increaseLoad')
+  assert.equal(next.fromWeightKg, 55)
+  assert.equal(next.suggestedWeightKg, 58)
+  assert.equal(next.targetReps, 8)
+})
+
+test('legacy normal sessions that copied a ratcheted app suggestion do not contaminate baseline', () => {
+  const checkIn = { recovery: 'normal', previousBlockLoad: 'aboutRight', painLevel: 'none' }
+  const prescription = strengthPrescription(profile(), 'lowerBody', 'normal')
+  const history = [
+    gymEvidence({ date: '2026-09-02', weightKg: 55, reps: 8 }),
+    gymEvidence({ date: '2026-09-30', weightKg: 49.5, reps: 8, mode: 'deload' }),
+    gymEvidence({ date: '2026-10-08', weightKg: 49.5, reps: 9 }),
+    gymEvidence({ date: '2026-10-15', weightKg: 49.5, reps: 10 }),
+    gymEvidence({ date: '2026-10-28', weightKg: 44.5, reps: 8, mode: 'deload' }),
+    gymEvidence({ date: '2026-11-05', weightKg: 44.5, reps: 9 }),
+  ]
+  history.forEach((session, index) => {
+    session.sets[0].slot = 'squat'
+    if ([2, 3].includes(index)) session.sets[0].suggestedWeightKg = 49.5
+    if (index === 5) session.sets[0].suggestedWeightKg = 44.5
+  })
+  const next = strengthLoadPlan({ prescription, history, checkIn })[0]
+  assert.equal(next.fromWeightKg, 55)
+  assert.equal(next.suggestedWeightKg, 55)
+  assert.equal(next.targetReps, 8)
+
+  // A lower load chosen independently of the suggestion is still respected.
+  history.at(-1).sets[0].suggestedWeightKg = 55
+  const athleteReduced = strengthLoadPlan({ prescription, history, checkIn })[0]
+  assert.equal(athleteReduced.fromWeightKg, 44.5)
+})
+
 test('AI reply contract and parser preserve focus/core; reject changed prescription or excessive deload sets', () => {
   const skeleton = build(profile(), { checkIn: { recovery: 'fatigued' } })
   const reply = generated(skeleton)

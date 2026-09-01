@@ -2,7 +2,7 @@
 
 ## Current Coach contract (scheduler v5)
 
-New Coach prompts use `cadence-coach-v4`, not the expanded markdown template
+New Coach prompts use `cadence-coach-v5`, not the expanded markdown template
 below. The remainder of this document is the legacy expanded-format reference;
 its full governance text is not appended to v5 prompts. The executable contract
 is in `src/services/planning/coachProtocol.js` and the local plan validator.
@@ -679,7 +679,11 @@ switches take precedence: opting out of all strength schedules zero.
   then uses double progression: repetitions advance toward 10 before a small
   2.5% upper-body or 5% lower-body load increase resets the target to 8 reps.
   Missing effort/recovery evidence holds progression. Deload/taper never progress
-  load and suggest about 10% less than the established load.
+  load and suggest about 10% less than the established normal-session load.
+  Their actual logged loads and temporary 8-rep target never replace or reset the
+  normal working baseline/repetition stage. Legacy normal sessions that exactly
+  copied an invalid below-baseline app suggestion are excluded from baseline
+  recovery; independently chosen lower actual loads remain valid evidence.
 - Recovery phase, fatigue, a too-hard previous block, or mild pain triggers
   the deload prescription. Significant pain suppresses strength.
 - No strength on long/brick days, no third daily session, no extra training

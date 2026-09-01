@@ -44,6 +44,9 @@ const successfulLoad = (session, set) => set?.isCompleted && !set?.isSkipped
   && Number.isFinite(set.weightKg) && set.weightKg > 0
   && Number.isFinite(session.perceivedEffort) && session.perceivedEffort <= 7
   && !['pain', 'fatigue'].includes(session.workoutResult?.context)
+const completedLoad = (session, set) => set?.isCompleted && !set?.isSkipped
+  && Number.isFinite(set.weightKg) && set.weightKg > 0
+  && session.strengthPrescription?.mode === 'normal'
 
 export function strengthLoadPlan({ prescription, history = [], checkIn = {} }) {
   return prescription.exerciseSlots.map(slot => {
@@ -54,21 +57,37 @@ export function strengthLoadPlan({ prescription, history = [], checkIn = {} }) {
     const latest = evidence.at(-1)
     const preferredExercise = latest?.set.exercise ?? null
     const sameExercise = evidence.filter(row => exerciseKey(row.set.exercise) === exerciseKey(preferredExercise))
-    const latestLoaded = sameExercise.filter(row => Number.isFinite(row.set.weightKg) && row.set.weightKg > 0).at(-1)
-    if (!latestLoaded) {
+    // Recovery/taper loads are temporary derivatives of the normal working
+    // baseline. They remain useful log data but must never become that baseline
+    // or every deload would ratchet the next one down by another 10%.
+    const normalLoaded = sameExercise.filter(row => completedLoad(row.session, row.set))
+    // Repair plans created by the old ratcheting bug without disregarding a
+    // genuinely athlete-chosen reduction. A lower normal load is ignored only
+    // when it exactly followed Cadence's own lower suggestion; performing less
+    // than the suggestion remains valid new evidence.
+    const trustedNormalLoaded = normalLoaded.reduce((trusted, row) => {
+      const baseline = trusted.at(-1)?.set.weightKg
+      const suggested = row.set.suggestedWeightKg
+      const followedInvalidReduction = Number.isFinite(baseline) && row.set.weightKg < baseline
+        && Number.isFinite(suggested) && Math.abs(row.set.weightKg - suggested) < 0.01
+      if (!followedInvalidReduction) trusted.push(row)
+      return trusted
+    }, [])
+    const latestNormalLoaded = trustedNormalLoaded.at(-1)
+    if (!latestNormalLoaded) {
       return { slot, action: 'establish', preferredExercise,
         fromWeightKg: null, suggestedWeightKg: null, targetReps: slot === 'core' ? null : 8,
-        reason: 'Log the actual load; no numerical load is inferred.' }
+        reason: 'Log a completed normal-session load; recovery/taper loads do not establish a baseline.' }
     }
-    const comparable = sameExercise.filter(row =>
+    const comparable = trustedNormalLoaded.filter(row =>
       row.session.strengthPrescription?.mode === 'normal' && successfulLoad(row.session, row.set))
     const lastTwo = comparable.slice(-2)
-    const fromWeightKg = latestLoaded.set.weightKg
-    const lastReps = Number.isInteger(latestLoaded.set.reps) ? latestLoaded.set.reps : null
+    const fromWeightKg = latestNormalLoaded.set.weightKg
+    const lastReps = Number.isInteger(latestNormalLoaded.set.reps) ? latestNormalLoaded.set.reps : null
     if (prescription.mode !== 'normal') {
       return { slot, action: 'reduce', preferredExercise, fromWeightKg,
-        suggestedWeightKg: roundedHalf(fromWeightKg * 0.9), targetReps: lastReps,
-        reason: `${prescription.mode} week: about 10% lighter, no progression.` }
+        suggestedWeightKg: roundedHalf(fromWeightKg * 0.9), targetReps: slot === 'core' ? null : 8,
+        reason: `${prescription.mode} week: about 10% lighter, no progression; the normal baseline and repetition stage are preserved.` }
     }
     const recoveryOkay = checkIn.recovery === 'normal' && checkIn.previousBlockLoad !== 'tooHard'
       && !['mild', 'significant'].includes(checkIn.painLevel)

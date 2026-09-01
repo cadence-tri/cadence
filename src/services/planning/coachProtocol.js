@@ -1,8 +1,8 @@
 import { canonicalEnduranceSets } from './endurancePlanning.js'
 import { STRENGTH_SLOT_LABELS } from './strengthPlanning.js'
 
-export const COACH_PROTOCOL = 'cadence-coach-v4'
-const LEGACY_COACH_PROTOCOLS = new Set(['cadence-coach-v1', 'cadence-coach-v2', 'cadence-coach-v3'])
+export const COACH_PROTOCOL = 'cadence-coach-v5'
+const LEGACY_COACH_PROTOCOLS = new Set(['cadence-coach-v1', 'cadence-coach-v2', 'cadence-coach-v3', 'cadence-coach-v4'])
 // Non-security identifier: binds a reply to the exact local immutable plan.
 // Import also checks live fitness/evidence fingerprints before any DB write.
 export function coachBlockId(skeleton) {

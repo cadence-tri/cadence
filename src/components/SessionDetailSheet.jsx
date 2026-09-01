@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import WorkoutResultForm from './WorkoutResultForm'
-import { CheckCircle2, XCircle } from 'lucide-react'
+import { CheckCircle2 } from 'lucide-react'
 import { format } from 'date-fns'
 import Sheet from './Sheet'
 import CompletionRing from './CompletionRing'
@@ -19,14 +19,6 @@ import {
 import { startOfWeekMon, addDays, asDate, isSameDay } from '../services/dateUtils'
 import { db } from '../db/db'
 import { runStepPresentation, runWorkoutOverview } from './runPrescriptionPresentation'
-
-function SkippedBadge() {
-  return (
-    <span className="text-[10px] font-semibold text-minor-text bg-minor-text/15 px-1.5 py-0.5 rounded-full shrink-0">
-      Skipped
-    </span>
-  )
-}
 
 /** Editable form for one prescribed item. Field set depends on
  * discipline: gym gets sets/reps/weight, everything else (swim/bike/run/
@@ -87,14 +79,11 @@ function EditableSetRow({ set, discipline, displayLabel, onChange }) {
   )
 }
 
-/** A prescribed item's row, outside edit mode — two independent tap
- * targets (done / skipped) rather than a single toggle, so "I did this"
- * and "I'm deliberately not doing this" are both one tap away instead of
- * skip only being reachable by leaving the item blank forever. Once every
- * item in a session is marked one way or the other, the session counts
- * as fully addressed (see `db/session.js`'s `completionFraction`) and
- * shows up in Stats — skipped items themselves just don't contribute any
- * distance/duration/weight to those stats. */
+/** A prescribed item's row, outside edit mode — completion stays the primary
+ * left-side action while the less common skip action is explicit text on the
+ * right. Both remain one-tap toggles. Once every item is marked one way or the
+ * other, the session counts as fully addressed (see `db/session.js`'s
+ * `completionFraction`); skipped items contribute no volume to Stats. */
 function loadActionLabel(action) {
   return ({
     establish: 'Log a baseline load',
@@ -149,10 +138,17 @@ function GymLoadControl({ set, onWeightChange }) {
 function SetRow({ set, color, discipline, runView, showLoadControl, onSetStatus, onWeightChange }) {
   const setStatus = (status) => () => onSetStatus(status)
   const addressed = set.isCompleted || set.isSkipped
+  const itemName = runView?.label || set.exercise || 'step'
 
   return (
-    <div className="flex items-center gap-2 py-2">
-      <button onClick={setStatus('done')} aria-label="Mark done" className="shrink-0">
+    <div className="flex items-start gap-2 py-2">
+      <button
+        type="button"
+        onClick={setStatus('done')}
+        aria-label={set.isCompleted ? `Mark ${itemName} not done` : `Mark ${itemName} done`}
+        aria-pressed={set.isCompleted}
+        className="w-11 h-11 -ml-2 shrink-0 flex items-center justify-center rounded-full focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+      >
         <CheckCircle2
           size={20}
           style={{ color: set.isCompleted ? color : 'var(--color-minor-text)' }}
@@ -160,36 +156,46 @@ function SetRow({ set, color, discipline, runView, showLoadControl, onSetStatus,
           className={set.isCompleted ? '' : 'opacity-35'}
         />
       </button>
-      <button onClick={setStatus('skipped')} aria-label="Mark skipped" className="shrink-0">
-        <XCircle
-          size={20}
-          className="text-minor-text"
-          strokeWidth={set.isSkipped ? 2.5 : 1.5}
-          style={{ opacity: set.isSkipped ? 1 : 0.35 }}
-        />
-      </button>
-      <div className="flex-1 min-w-0 flex items-center gap-1.5 flex-wrap">
-        {runView ? (
-          <div className={`min-w-0 ${addressed ? 'line-through text-minor-text' : ''}`}>
-            <div className="flex items-baseline gap-x-1.5 flex-wrap">
-              <span className={`text-sm font-semibold ${addressed ? '' : 'text-main-text'}`}>{runView.label}</span>
-              {runView.quantity && <span className={`text-sm ${addressed ? '' : 'text-main-text'}`}>· {runView.quantity}</span>}
-            </div>
-            {(runView.target || runView.rpe) && (
-              <div className="mt-0.5 flex items-center gap-1.5 flex-wrap text-xs text-minor-text">
-                {runView.target && <span>{runView.target}</span>}
-                {runView.target && runView.rpe && <span aria-hidden="true">·</span>}
-                {runView.rpe && <span>{runView.rpe}</span>}
+      <div className="flex-1 min-w-0 py-1">
+        <div className="flex items-start gap-2">
+          <div className="flex-1 min-w-0">
+            {runView ? (
+              <div className={`min-w-0 ${addressed ? 'line-through text-minor-text' : ''}`}>
+                <div className="flex items-baseline gap-x-1.5 flex-wrap">
+                  <span className={`text-sm font-semibold ${addressed ? '' : 'text-main-text'}`}>{runView.label}</span>
+                  {runView.quantity && <span className={`text-sm ${addressed ? '' : 'text-main-text'}`}>· {runView.quantity}</span>}
+                </div>
+                {(runView.target || runView.rpe) && (
+                  <div className="mt-0.5 flex items-center gap-1.5 flex-wrap text-xs text-minor-text">
+                    {runView.target && <span>{runView.target}</span>}
+                    {runView.target && runView.rpe && <span aria-hidden="true">·</span>}
+                    {runView.rpe && <span>{runView.rpe}</span>}
+                  </div>
+                )}
               </div>
+            ) : (
+              <span className={`text-sm ${addressed ? 'line-through text-minor-text' : 'text-main-text'}`}>
+                {setSummary(showLoadControl ? { ...set, weightKg: null } : set)}
+              </span>
             )}
           </div>
-        ) : (
-          <span className={`text-sm ${addressed ? 'line-through text-minor-text' : 'text-main-text'}`}>
-            {setSummary(showLoadControl ? { ...set, weightKg: null } : set)}
-          </span>
+          <button
+            type="button"
+            onClick={setStatus('skipped')}
+            aria-label={set.isSkipped ? `Undo skip for ${itemName}` : `Skip ${itemName}`}
+            aria-pressed={set.isSkipped}
+            className="w-16 min-h-11 -my-1 shrink-0 flex items-center justify-center rounded-full text-xs font-semibold text-minor-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+          >
+            <span className={set.isSkipped ? 'rounded-full bg-minor-text/15 px-2.5 py-1' : ''}>
+              {set.isSkipped ? 'Skipped' : 'Skip'}
+            </span>
+          </button>
+        </div>
+        {set.notes && (
+          <p className={`mt-1 w-full text-xs text-minor-text ${set.isSkipped ? 'line-through opacity-65' : ''}`}>
+            {set.notes}
+          </p>
         )}
-        {set.isSkipped && <SkippedBadge />}
-        {set.notes && <p className="w-full text-xs text-minor-text">{set.notes}</p>}
         {discipline === 'gym' && showLoadControl && (
           <GymLoadControl set={set} onWeightChange={onWeightChange} />
         )}

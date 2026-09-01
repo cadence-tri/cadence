@@ -7,6 +7,7 @@ import { packCoachContext, unpackCoachContext, coachContext, buildCompactCoachPr
 import { parseMarkdown } from '../src/services/markdownImporter.js'
 import { completedLoadWeeks, marathonCategory } from '../src/services/planning/seasonPlanning.js'
 import { fitnessFingerprint } from '../src/services/planning/fitness.js'
+import { canonicalEnduranceSets } from '../src/services/planning/endurancePlanning.js'
 import { asDate, toISODateString } from '../src/services/dateUtils.js'
 import { readPendingCoach, savePendingCoach, clearPendingCoach } from '../src/services/planning/pendingCoach.js'
 const today = new Date('2026-08-31T12:00:00')
@@ -177,7 +178,7 @@ test('compact imports reject missing, duplicate, stale, changed and malformed re
   for (const mutate of [
     r => r.sessions.pop(), r => { r.sessions[1].id = r.sessions[0].id },
     r => { r.blockId = 'old-block' }, r => { r.sessions[0].totalDistance = 999 },
-    r => { r.sessions[0].cues = { unknown: 'cue' } },
+    r => { r.sessions[0].cues = { unknown: 5 } },
     r => { const s = r.sessions.find(s => s.sets); s.sets[0].reps = -2 },
   ]) {
     const reply = structuredClone(original); mutate(reply)
@@ -185,6 +186,23 @@ test('compact imports reject missing, duplicate, stale, changed and malformed re
   }
   assert.throws(() => expandCoachReply(JSON.stringify(original).slice(0, -20), skeleton), /incomplete/)
   assert.throws(() => expandCoachReply(JSON.stringify(original), null), /original saved schedule/)
+})
+
+test('a cue keyed to a stepId outside this session is dropped with a warning, not rejected', () => {
+  const skeleton = build(), original = coachFixture(skeleton), specs = all(skeleton)
+  const targetIndex = specs.findIndex(s => canonicalEnduranceSets(s.endurancePrescription ?? { steps: [] }).length > 0)
+  const spec = specs[targetIndex], targetId = `S${targetIndex + 1}`
+  const realStepId = canonicalEnduranceSets(spec.endurancePrescription).at(-1).stepId
+  const bogusStepId = `${realStepId}-does-not-exist`
+  const legitimateCue = 'Keep it relaxed and controlled.'
+  const reply = structuredClone(original)
+  reply.sessions.find(s => s.id === targetId).cues = { [realStepId]: legitimateCue, [bogusStepId]: 'Borrowed from a different session shape.' }
+  const { sessions, warnings } = expandCoachReply(JSON.stringify(reply), skeleton)
+  assert.ok(warnings.some(w => w.includes(targetId) && w.includes(bogusStepId)))
+  const imported = sessions.find(s => s.skeletonId === spec.skeletonId)
+  assert.ok(!imported.sets.some(s => s.notes?.includes('Borrowed from a different session shape')))
+  // The legitimate cue for this session still applies normally.
+  assert.ok(imported.sets.some(s => s.notes?.includes(legitimateCue)))
 })
 
 test('completion without structured feedback counts full workload, but incomplete weeks do not', () => {
@@ -267,4 +285,49 @@ test('fatigue, missing feedback, insufficient availability and explicit duration
   const s = build(constrained)
   assert.deepEqual(validateSkeleton(s, constrained).errors, [])
   assert.ok(all(s).filter(s => s.discipline === 'run').every(s => s.targetDurationMin <= 45))
+})
+
+test('triathlon run/bike volume does not ratchet down block over block when sessions are completed without structured feedback', () => {
+  // Regression for a real-world report: a brick session's bike/run legs were
+  // re-capped every week by an independent, slow-growing minutes ramp that
+  // ignored the scheduler's own phase-aware weekly target and discarded the
+  // difference. The discarded (lower) number then became next block's own
+  // progression baseline, compounding into a steady decline across many
+  // 4-week recovery cycles -- run collapsed hardest since it has only one
+  // small standalone session propping up the weekly total next to the
+  // heavily-clipped brick leg. This happened identically whether or not
+  // structured feedback was given, since the mechanism only required
+  // completion (which a quick "mark as done" already provides).
+  const profile = marathonProfile({
+    sport: 'triathlon', triathlonDistance: 'olympic', onboardingTriPriorExperience: true, onboardingKnowsThreshold: true,
+    trainingFitness: { swim: { level: 'regular' }, run: { level: 'experienced' }, bike: { level: 'regular' } },
+  })
+  const result = simulateSeason({ profile, feedback: null })
+  assert.deepEqual(result.summary.errors, [])
+  const loadWeeks = result.weeks.filter(w => !['recovery', 'taper'].includes(w.phase))
+  assert.ok(loadWeeks.length >= 8, 'expected several non-recovery weeks across the season')
+  // Long-horizon trend: the second half of the season should not have
+  // collapsed below the first half. A genuine ratchet-down bug shrinks this
+  // to a fraction of the starting volume; healthy progression holds or grows.
+  const mid = Math.floor(loadWeeks.length / 2)
+  for (const disc of ['run', 'bike']) {
+    const key = `${disc}Km`
+    const earlyPeak = Math.max(...loadWeeks.slice(0, mid).map(w => w.targets[key]))
+    const latePeak = Math.max(...loadWeeks.slice(mid).map(w => w.targets[key]))
+    assert.ok(latePeak >= earlyPeak * 0.9, `${disc}: late-season peak (${latePeak}) collapsed below early-season peak (${earlyPeak})`)
+  }
+  // Cycle-by-cycle: each recovery week must be lower than the week before it,
+  // and the week right after recovery must rebound close to (not collapse
+  // below) that pre-recovery peak -- not just monotonically drift downward
+  // cycle after cycle.
+  for (let i = 1; i < result.weeks.length - 1; i++) {
+    const week = result.weeks[i]
+    if (week.phase !== 'recovery') continue
+    const before = result.weeks[i - 1], after = result.weeks[i + 1]
+    if (before.phase === 'recovery' || after.phase === 'recovery') continue
+    for (const disc of ['run', 'bike']) {
+      const key = `${disc}Km`
+      assert.ok(after.targets[key] >= before.targets[key] * 0.9, `${disc}: week after recovery (${after.targets[key]}) fell well below the pre-recovery week (${before.targets[key]})`)
+    }
+  }
 })

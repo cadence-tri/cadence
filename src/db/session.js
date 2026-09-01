@@ -141,6 +141,24 @@ export function derivedDistanceKm(session) {
   return totalDistanceKm(session)
 }
 
+/** Completed distance for one leg of a brick. Brick prescriptions retain
+ * separate bike/run distances even though the top-level session discipline is
+ * `brick`, so Stats can attribute each performed leg to the corresponding
+ * weekly Bike or Run total. A skipped or still-incomplete leg contributes
+ * nothing, and legacy bricks without per-leg sets count only when the whole
+ * session is complete. */
+export function completedBrickLegDistanceKm(session, discipline) {
+  if (session?.discipline !== 'brick' || !['bike', 'run'].includes(discipline)) return 0
+  const legSets = (session.sets ?? []).filter((set) => set.discipline === discipline)
+  const completed = legSets.length > 0
+    ? legSets.every((set) => set.isCompleted === true && !set.isSkipped)
+    : isFullyCompleted(session)
+  if (!completed) return 0
+  const prescribed = session.endurancePrescription?.legDistancesKm?.[discipline]
+    ?? session.brickTargets?.[`${discipline}Km`]
+  return Number.isFinite(Number(prescribed)) && Number(prescribed) > 0 ? Number(prescribed) : 0
+}
+
 /** Distance shown in session feedback. Before the athlete addresses any
  * distance-bearing steps, show the prescribed whole-session total. Once
  * steps are marked done/skipped, show only completed distance so the card

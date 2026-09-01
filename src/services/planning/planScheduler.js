@@ -216,12 +216,14 @@ function latestCompletedWeeklyDistance(planHistory, discipline, originDate, befo
   return completedWeeklyDistances(planHistory, discipline, originDate, beforeDate).at(-1)?.totalKm ?? null
 }
 
-function latestCompletedLoadWeekDistance(planHistory, weekPhases, discipline, originDate, beforeDate) {
+function latestCompletedLoadWeekDistance(planHistory, weekPhases, discipline, originDate, beforeDate, { useSessionPhase = false } = {}) {
   const weeks = completedWeeklyDistances(planHistory, discipline, originDate, beforeDate)
   for (let i = weeks.length - 1; i >= 0; i--) {
     const week = weeks[i]
-    const phase = phaseForDate(weekPhases, asDate(week.weekStart))
-    if (phase !== 'recovery' && phase !== 'taper') return week.totalKm
+    const recordedPhase = phaseForDate(weekPhases, asDate(week.weekStart))
+    const reducedByWeekRecord = recordedPhase === 'recovery' || recordedPhase === 'taper'
+    const reducedBySessionRecord = useSessionPhase && (week.phase === 'recovery' || week.phase === 'taper')
+    if (!reducedByWeekRecord && !reducedBySessionRecord) return week.totalKm
   }
   return weeks.at(-1)?.totalKm ?? null
 }
@@ -328,7 +330,12 @@ function triWeek(profile, weekDates, phase, tier, checkIn, previousFullWeekTarge
   const targets = {}
   for (const disc of ['swim', 'bike', 'run']) {
     const step = disc === 'swim' ? 0.1 : 0.5
-    const previous = previousFullWeekTargets[`${disc}Km`]
+    const ceiling = base[disc][1]
+    const rawPrevious = previousFullWeekTargets[`${disc}Km`]
+    // Cadence supports advanced age-group athletes, not professional-volume
+    // plans. Demonstrated work above the selected event's product range must
+    // not keep an automatically generated triathlon plan above that range.
+    const previous = Number.isFinite(Number(rawPrevious)) ? Math.min(Number(rawPrevious), ceiling) : rawPrevious
     let t
     if (phase === 'recovery' && weekDates.length === 7) {
       t = recoveryWeekTarget(previous, tier, step)
@@ -342,7 +349,7 @@ function triWeek(profile, weekDates, phase, tier, checkIn, previousFullWeekTarge
         ? progressTowardTarget(desired, previous, tier, { allowReduction: recovery < 1, step })
         : round(desired * partialWeekFactor, step)
     }
-    targets[`${disc}Km`] = t
+    targets[`${disc}Km`] = Math.min(t, ceiling)
   }
   if (!trainDates.length) return { sessions: [], targets, trainingDates: [] }
   const longDate = longSessionDate(trainDates, profile)
@@ -365,8 +372,12 @@ function triWeek(profile, weekDates, phase, tier, checkIn, previousFullWeekTarge
   // brick participates in bike/run allocation, so rounding there cannot
   // create or lose weekly distance either.
   const swimAllocations = allocateRoundedTotal(targets.swimKm, swimDates.map(() => 1), 0.1)
-  const bikeAllocations = allocateRoundedTotal(targets.bikeKm, [0.4, ...bikeDates.map(() => 0.6 / Math.max(1, bikeDates.length))], 0.5)
-  const runAllocations = allocateRoundedTotal(targets.runKm, [0.4, ...runDates.map(() => 0.6 / Math.max(1, runDates.length))], 0.5)
+  // Spread the weekly budget evenly across the brick leg and standalone
+  // sessions. A fixed 40% brick share caused the other sessions to hit their
+  // duration caps while the brick still had room, silently lowering the final
+  // weekly total and feeding that lower number into the next block.
+  const bikeAllocations = allocateRoundedTotal(targets.bikeKm, [1, ...bikeDates.map(() => 1)], 0.5)
+  const runAllocations = allocateRoundedTotal(targets.runKm, [1, ...runDates.map(() => 1)], 0.5)
   sessions[0].brickTargets = { bikeKm: bikeAllocations[0], runKm: runAllocations[0] }
 
   swimDates.forEach((d, i) => sessions.push(makeSession(d, 'swim', 'easy', swimAllocations[i], phase, { sequence: i + 1, targetPaceOrPower: numeric.swimPacePer100m })))
@@ -385,9 +396,9 @@ export function buildPlanSkeleton({ profile, recentSessions = [], planHistory = 
   const { tier, reasons, hasSubstantialLog } = computeExperienceTier(profile, recentSessions)
   const progressionReference = profile.sport === 'triathlon'
     ? {
-        swimKm: latestCompletedLoadWeekDistance(planHistory, weekPhases, 'swim', originDate, blockStart),
-        bikeKm: latestCompletedLoadWeekDistance(planHistory, weekPhases, 'bike', originDate, blockStart),
-        runKm: latestCompletedLoadWeekDistance(planHistory, weekPhases, 'run', originDate, blockStart),
+        swimKm: latestCompletedLoadWeekDistance(planHistory, weekPhases, 'swim', originDate, blockStart, { useSessionPhase: true }),
+        bikeKm: latestCompletedLoadWeekDistance(planHistory, weekPhases, 'bike', originDate, blockStart, { useSessionPhase: true }),
+        runKm: latestCompletedLoadWeekDistance(planHistory, weekPhases, 'run', originDate, blockStart, { useSessionPhase: true }),
       }
     : { runKm: latestCompletedLoadWeekDistance(planHistory, weekPhases, 'run', originDate, blockStart) }
   const weeks = []
@@ -479,7 +490,8 @@ export function buildPlanSkeleton({ profile, recentSessions = [], planHistory = 
   const swimGoal = parseDurationSeconds(profile.goalSwimTime)
   const runKm = profile.sport === 'running' ? RUNNING_META[profile.runningDistance]?.distanceKm : TRIATHLON_META[profile.triathlonDistance]?.legs.run
   const swimKm = TRIATHLON_META[profile.triathlonDistance]?.legs.swim
-  const endurancePlan = applyEndurancePlanning({ profile, weeks, history: planHistory, today, checkIn, qualityCap: EXPERIENCE_RULES[tier].maxQualitySessions,
+  const endurancePlan = applyEndurancePlanning({ profile, weeks, history: planHistory, today, checkIn,
+    qualityCap: EXPERIENCE_RULES[tier].maxQualitySessions, experienceTier: tier,
     goals: { run: runGoal && runKm ? runGoal / runKm : null, swim: swimGoal && swimKm ? swimGoal / (swimKm * 10) : null } })
   const endurance = weeks.flatMap((week) => week.sessions)
   const priorStrength = planHistory.filter((s) => s.discipline === 'gym'

@@ -6,7 +6,7 @@ import { db } from '../db/db'
 import { DISCIPLINES, disciplineDisplayName, disciplineColor } from '../db/discipline'
 import { PHASES, phaseDisplayName, phaseColor } from '../db/phase'
 import { phaseForDate } from '../db/weekPhase'
-import { countsTowardStats, isFullyCompleted, derivedDistanceKm, durationMinutes } from '../db/session'
+import { countsTowardStats, isFullyCompleted, derivedDistanceKm, completedBrickLegDistanceKm, durationMinutes } from '../db/session'
 import { asDate } from '../services/dateUtils'
 import { chartUpperBound, formatAxisTick, formatVolumeLabel, weeklyBuckets } from '../services/statsChart'
 import { format } from 'date-fns'
@@ -28,8 +28,9 @@ function VolumeBarLabel({ x, y, width, value, unit }) {
 
 function DisciplinePanel({ discipline, sessions }) {
   const distancePoints = weeklyBuckets(
-    sessions.filter((s) => s.discipline === discipline && countsTowardStats(s) && isFullyCompleted(s)),
-    (s) => derivedDistanceKm(s)
+    sessions.filter((s) => (s.discipline === discipline || (s.discipline === 'brick' && ['bike', 'run'].includes(discipline)))
+      && countsTowardStats(s) && isFullyCompleted(s)),
+    (s) => s.discipline === 'brick' ? completedBrickLegDistanceKm(s, discipline) : derivedDistanceKm(s)
   )
   const hasDistance = distancePoints.some((p) => p.value > 0)
   const points = hasDistance
@@ -150,33 +151,39 @@ function GymProgressionSection({ sessions }) {
     return pts.sort((a, b) => a.date - b.date)
   }, [sessions, activeExercise])
 
-  if (exerciseNames.length === 0) return null
-
   return (
     <div className="p-4 bg-panel rounded-xl">
       <div className="text-base font-bold text-main-text mb-3">Gym exercise progression</div>
-      <select
-        value={activeExercise}
-        onChange={(e) => setSelected(e.target.value)}
-        className="w-full p-2.5 rounded-lg bg-background text-main-text mb-3 outline-none"
-      >
-        {exerciseNames.map((n) => (
-          <option key={n} value={n}>
-            {n}
-          </option>
-        ))}
-      </select>
-      {points.length === 0 ? (
-        <p className="text-xs text-minor-text">No weighted sets logged yet for this exercise.</p>
+      {exerciseNames.length === 0 ? (
+        <p className="text-xs text-minor-text">
+          No exercise weights logged in this view. This chart uses the actual weight you log, not the suggested weight; bodyweight exercises do not create weight-progression points.
+        </p>
       ) : (
-        <ResponsiveContainer width="100%" height={200}>
-          <LineChart data={points} margin={{ top: 8, right: 12, left: -20, bottom: 0 }}>
-            <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--color-minor-text)' }} axisLine={false} tickLine={false} />
-            <YAxis tickFormatter={formatAxisTick} tick={{ fontSize: 10, fill: 'var(--color-minor-text)' }} axisLine={false} tickLine={false} />
-            <Tooltip />
-            <Line type="monotone" dataKey="weightKg" stroke={disciplineColor('gym')} strokeWidth={2} dot={{ r: 3 }} />
-          </LineChart>
-        </ResponsiveContainer>
+        <>
+          <select
+            value={activeExercise}
+            onChange={(e) => setSelected(e.target.value)}
+            className="w-full p-2.5 rounded-lg bg-background text-main-text mb-3 outline-none"
+          >
+            {exerciseNames.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+          {points.length === 0 ? (
+            <p className="text-xs text-minor-text">No weighted sets logged yet for this exercise.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={points} margin={{ top: 8, right: 12, left: -20, bottom: 0 }}>
+                <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--color-minor-text)' }} axisLine={false} tickLine={false} />
+                <YAxis tickFormatter={formatAxisTick} tick={{ fontSize: 10, fill: 'var(--color-minor-text)' }} axisLine={false} tickLine={false} />
+                <Tooltip />
+                <Line type="monotone" dataKey="weightKg" stroke={disciplineColor('gym')} strokeWidth={2} dot={{ r: 3 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </>
       )}
     </div>
   )
@@ -257,9 +264,9 @@ export default function StatsScreen() {
               <GymWeeklyPanel sessions={sessions} />
             </div>
           </div>
-          <GymProgressionSection sessions={sessions} />
         </>
       )}
+      <GymProgressionSection sessions={sessions} />
     </div>
   )
 }

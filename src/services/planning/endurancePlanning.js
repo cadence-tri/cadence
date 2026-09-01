@@ -1,5 +1,6 @@
 import { DISCIPLINES, FITNESS_POLICY_VERSION, OPTIONAL_NOTE, resolveFitness, normalizeFitness, evidenceFor, successfulEvidence, dayGap, formatFitness, fitnessFingerprint, evidenceFingerprint, baselineReview } from './fitness.js'
 import { assessmentPhaseKey, fullyDone } from './seasonPlanning.js'
+import { recoveryWeekTarget } from './planRules.js'
 
 // Conservative product defaults, not individually measured physiological zones.
 // Only one workload dimension changes between adjacent stages.
@@ -15,9 +16,86 @@ export const RACE_STAGES = {
   swim: [[4, 100, 30], [5, 100, 30], [6, 100, 30], [6, 125, 30], [6, 125, 25]],
 }
 const round = (n, step = 1) => Number((Math.round(n / step) * step).toFixed(6))
+
+function allocateRoundedTotal(total, weights, step) {
+  const totalUnits = Math.round(total / step)
+  const weightSum = weights.reduce((sum, value) => sum + Math.max(0, value), 0)
+  if (!weights.length || weightSum <= 0) return weights.map(() => 0)
+  const rawUnits = weights.map((value) => totalUnits * Math.max(0, value) / weightSum)
+  const units = rawUnits.map(Math.floor)
+  let remaining = totalUnits - units.reduce((sum, value) => sum + value, 0)
+  const order = rawUnits.map((raw, index) => ({ index, fraction: raw - Math.floor(raw) }))
+    .sort((a, b) => b.fraction - a.fraction || a.index - b.index)
+  for (let i = 0; i < remaining; i++) units[order[i % order.length].index] += 1
+  return units.map((value) => round(value * step, step))
+}
+
+function setTriDisciplineTotal(week, discipline, totalKm) {
+  const portions = []
+  for (const session of week.sessions) {
+    if (session.discipline === discipline) {
+      portions.push({ value: session.targetDistanceKm ?? 0, set: (value) => { session.targetDistanceKm = value } })
+    } else if (session.discipline === 'brick' && ['bike', 'run'].includes(discipline)) {
+      portions.push({ value: session.brickTargets?.[`${discipline}Km`] ?? 0,
+        set: (value) => { session.brickTargets[`${discipline}Km`] = value } })
+    }
+  }
+  const step = discipline === 'swim' ? 0.1 : 0.5
+  const allocations = allocateRoundedTotal(totalKm, portions.map((portion) => portion.value), step)
+  portions.forEach((portion, index) => portion.set(allocations[index]))
+  week.targets[`${discipline}Km`] = round(allocations.reduce((sum, value) => sum + value, 0), step)
+}
 const isReduced = (week, checkIn) => ['recovery', 'taper'].includes(week.phase) || checkIn.recovery !== 'normal'
   || checkIn.previousBlockLoad === 'tooHard' || checkIn.painLevel !== 'none'
 const normalCheckIn = (raw) => ({ recovery: 'normal', previousBlockLoad: 'aboutRight', painLevel: 'none', ...raw })
+
+const BRICK_EVENT_CAP_MINUTES = {
+  bike: { sprint: 75, olympic: 120, halfIronman: 180, ironman: 300 },
+  run: { sprint: 25, olympic: 40, halfIronman: 60, ironman: 90 },
+}
+function brickEventCapMinutes(profile, discipline) {
+  return BRICK_EVENT_CAP_MINUTES[discipline][profile.triathlonDistance] ?? BRICK_EVENT_CAP_MINUTES[discipline].olympic
+}
+// Minutes actually logged on the athlete's most recent completed, non-reduced
+// brick for this leg. Only completion is required (not structured feedback):
+// a quick "mark as done" already sets every set's isCompleted.
+function brickPriorMinutes(history, discipline, today) {
+  const prior = history.filter((s) => s.discipline === 'brick' && fullyDone(s) && dayGap(s.date, today) >= 0 && dayGap(s.date, today) <= 42 && !['recovery', 'taper'].includes(s.phase))
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)))[0]?.endurancePrescription
+  return prior?.steps?.filter((s) => s.discipline === discipline).reduce((n, s) => n + (s.durationSeconds ?? 0) / 60, 0) ?? 0
+}
+
+// The brick's bike/run legs have a genuine event-specific ceiling — they're a
+// race-simulation touch, not meant to carry most of the week's dose. Once
+// there's brick history, the leg is capped at that steady-state ceiling (see
+// the brick prescription below); whatever it can't carry belongs on the
+// week's standalone session(s) for that discipline instead of silently
+// vanishing from the week's total. This mirrors the same "don't lose volume
+// to an individual duration cap" principle already applied to swim and to
+// standalone run/bike sessions. Skipped on an athlete's very first-ever
+// brick, where a smaller, deliberately conservative ramp still applies.
+function redistributeBrickShortfall({ profile, week, states, history, today }) {
+  const brick = week.sessions.find((s) => s.discipline === 'brick')
+  if (!brick) return
+  for (const disc of ['bike', 'run']) {
+    if (!(brickPriorMinutes(history, disc, today) > 0)) continue
+    const desiredKm = brick.brickTargets?.[`${disc}Km`] ?? 0
+    if (!(desiredKm > 0)) continue
+    const target = effortTarget(disc, states[disc], 'brick')
+    const conversion = disc === 'bike' ? 3 : (target.high ?? 420) / 60
+    const capMinutes = Math.min(brickEventCapMinutes(profile, disc), normalizeFitness(profile.trainingFitness)[disc].maxSessionMinutes ?? Infinity)
+    const step = disc === 'swim' ? 0.1 : 0.5
+    const shortfall = round(Math.max(0, desiredKm - capMinutes / conversion), step)
+    if (!shortfall) continue
+    const standalone = week.sessions.filter((s) => s.discipline === disc && !s.isRace)
+    if (!standalone.length) continue
+    // Largest-remainder allocation, same as every other weekly split in this
+    // file, rather than an ad-hoc last-one-gets-the-remainder split — keeps
+    // the boost stable and evenly distributed instead of biasing one session.
+    const boosts = allocateRoundedTotal(shortfall, standalone.map(() => 1), step)
+    standalone.forEach((s, index) => { s.targetDistanceKm = round((s.targetDistanceKm ?? 0) + boosts[index], step) })
+  }
+}
 
 export function swimSessionCap(profile, history, today) {
   const f = normalizeFitness(profile.trainingFitness).swim
@@ -358,7 +436,7 @@ export function canonicalEnduranceSets(prescription) {
   return prescription.steps.map((s) => ({ ...s, isCompleted: false, isSkipped: false }))
 }
 
-export function applyEndurancePlanning({ profile, weeks, history, today, checkIn: input, goals = {}, qualityCap = 2 }) {
+export function applyEndurancePlanning({ profile, weeks, history, today, checkIn: input, goals = {}, qualityCap = 2, experienceTier = 'Intermediate' }) {
   const checkIn = normalCheckIn(input)
   const states = Object.fromEntries(DISCIPLINES.map((d) => [d, resolveFitness(profile, d, history, today)]))
   const decisions = Object.fromEntries(DISCIPLINES.map((d) => [d, { ...progressionDecision(profile, d, history, today, checkIn, states[d]),
@@ -378,6 +456,16 @@ export function applyEndurancePlanning({ profile, weeks, history, today, checkIn
   let previousLoadWeek = null
   for (const week of weeks) {
     week.progressionNotes = week.marathonPlan ? [week.marathonPlan.message] : []
+    // The scheduler creates both weeks before prescriptions apply session
+    // capacity. For triathlon recovery in Week 2, derive the deload from Week
+    // 1's achievable final total rather than its larger preliminary budget.
+    if (profile.sport === 'triathlon' && week.phase === 'recovery' && previousLoadWeek) {
+      for (const disc of DISCIPLINES) {
+        const prior = previousLoadWeek.targets[`${disc}Km`]
+        if (!(prior > 0) || !( `${disc}Km` in week.targets)) continue
+        setTriDisciplineTotal(week, disc, recoveryWeekTarget(prior, experienceTier, disc === 'swim' ? 0.1 : 0.5))
+      }
+    }
     for (const disc of DISCIPLINES) {
       const evidence = evidenceFor(history, disc, today)
       const latest = evidence[0]?.prescription
@@ -413,7 +501,10 @@ export function applyEndurancePlanning({ profile, weeks, history, today, checkIn
       }
       week.progressionNotes.push('Within-block workload held; the next block will reassess. No automatic weekly speed increase.')
     }
-    if (profile.sport === 'triathlon') constrainSwimWeek({ profile, week, history, today, checkIn })
+    if (profile.sport === 'triathlon') {
+      constrainSwimWeek({ profile, week, history, today, checkIn })
+      redistributeBrickShortfall({ profile, week, states, history, today })
+    }
     let qualityIndex = 0
     const brickDays = weeks.flatMap((w) => w.sessions.filter((s) => s.discipline === 'brick').map((s) => s.date))
     const longDays = weeks.flatMap((w) => w.sessions.filter((s) => s.role === 'long').map((s) => s.date))
@@ -441,15 +532,25 @@ export function applyEndurancePlanning({ profile, weeks, history, today, checkIn
         const steps = []
         for (const disc of ['bike', 'run']) {
           const target = effortTarget(disc, states[disc], 'brick')
-          const prior = history.filter(s => s.discipline === 'brick' && fullyDone(s) && dayGap(s.date, today) >= 0 && dayGap(s.date, today) <= 42 && !['recovery', 'taper'].includes(s.phase))
-            .sort((a, b) => String(b.date).localeCompare(String(a.date)))[0]?.endurancePrescription
-          const previousMinutes = prior?.steps?.filter(s => s.discipline === disc).reduce((n, s) => n + (s.durationSeconds ?? 0) / 60, 0)
+          const previousMinutes = brickPriorMinutes(history, disc, today)
           const baseMinutes = disc === 'bike' ? 60 : 20
-          const eventCap = disc === 'bike' ? ({ sprint: 75, olympic: 120, halfIronman: 180, ironman: 300 }[profile.triathlonDistance] ?? 120) : ({ sprint: 25, olympic: 40, halfIronman: 60, ironman: 90 }[profile.triathlonDistance] ?? 40)
-          const supportedMinutes = Math.min(eventCap, Math.max(baseMinutes, previousMinutes > 0 ? previousMinutes * (isReduced(week, checkIn) ? 0.75 : 1.05) : baseMinutes))
-          const minutes = Math.min(normalizeFitness(profile.trainingFitness)[disc].maxSessionMinutes ?? supportedMinutes,
-            (session.brickTargets[`${disc}Km`] ?? 0) * (disc === 'bike' ? 3 : (target.high ?? 420) / 60))
-          const km = round(minutes / (disc === 'bike' ? 3 : (target.high ?? 420) / 60), 0.5)
+          const eventCap = brickEventCapMinutes(profile, disc)
+          const conversion = disc === 'bike' ? 3 : (target.high ?? 420) / 60
+          const desiredMinutes = (session.brickTargets[`${disc}Km`] ?? 0) * conversion
+          // A slow ramp from a small floor only protects a brand-new athlete's
+          // very first brick from an unrealistic maiden distance. Once there is
+          // any completed brick, trust the scheduler's own phase-aware weekly
+          // target for this leg instead: it is already growth-limited and held
+          // from declining upstream (triWeek / progressTowardTarget). Re-capping
+          // it here every week to a slow, independent minutes ramp silently
+          // discarded most of the intended run/bike volume forever, and that
+          // shrunken number then became next block's own progression baseline.
+          // (Whatever this steady-state ceiling can't carry was already moved
+          // onto the standalone sessions above, in redistributeBrickShortfall.)
+          const rampMinutes = previousMinutes > 0 ? previousMinutes * (isReduced(week, checkIn) ? 0.75 : 1.05) : baseMinutes
+          const supportedMinutes = previousMinutes > 0 ? Infinity : Math.max(baseMinutes, rampMinutes)
+          const minutes = Math.min(eventCap, normalizeFitness(profile.trainingFitness)[disc].maxSessionMinutes ?? supportedMinutes, desiredMinutes)
+          const km = round(minutes / conversion, 0.5)
           session.brickTargets[`${disc}Km`] = km
           steps.push({ ...step(`${session.skeletonId}:${disc}`, 'work', disc, target, { seconds: Math.max(60, round(minutes * 60)), label: `Easy ${disc} leg; no threshold assessment off the bike` }), discipline: disc })
         }

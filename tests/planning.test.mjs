@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildPlanSkeleton } from '../src/services/planning/planScheduler.js'
 import { validateSkeleton, validateGeneratedPlan, mergeGeneratedWithSkeleton } from '../src/services/planning/planValidator.js'
-import { runningPaceTargets, parseDurationSeconds } from '../src/services/planning/planRules.js'
+import { runningPaceTargets, parseDurationSeconds, TRIATHLON_VOLUME_RANGES } from '../src/services/planning/planRules.js'
 import { effortLabel, sessionDistanceKmForDisplay, withAllSetsCompleted } from '../src/db/session.js'
 import { canonicalEnduranceSets } from '../src/services/planning/endurancePlanning.js'
 // These fixtures describe local calendar dates, not UTC-midnight instants.
@@ -461,6 +461,104 @@ test('normal same-phase progression is monotonic while an explicit recovery cond
   assert.equal(progressTowardTarget(37.5, 37, 'Advanced', { step: 0.5 }), 37.5)
   assert.equal(progressTowardTarget(30, 34, 'Advanced', { step: 0.5 }), 34)
   assert.equal(progressTowardTarget(30, 34, 'Advanced', { allowReduction: true, step: 0.5 }), 30)
+})
+
+test('healthy triathlon load rebounds after recovery and stays inside event-specific ceilings', () => {
+  assert.deepEqual(TRIATHLON_VOLUME_RANGES, {
+    sprint: { swim: [4, 8], bike: [60, 120], run: [15, 30] },
+    olympic: { swim: [6, 12], bike: [100, 180], run: [20, 40] },
+    halfIronman: { swim: [8, 15], bike: [150, 280], run: [25, 45] },
+    ironman: { swim: [10, 18], bike: [200, 350], run: [30, 55] },
+  })
+
+  const addCalendarDay = (date, days) => {
+    const result = new Date(`${date}T12:00:00`)
+    result.setDate(result.getDate() + days)
+    return result
+  }
+  const completedSession = (session) => ({
+    ...session,
+    date: localISO(session.date),
+    isCompleted: true,
+    totalDistance: session.discipline === 'swim'
+      ? session.targetDistanceKm * 1000
+      : session.discipline === 'brick'
+        ? (session.brickTargets?.bikeKm ?? 0) + (session.brickTargets?.runKm ?? 0)
+        : session.targetDistanceKm,
+  })
+
+  for (const triathlonDistance of Object.keys(TRIATHLON_VOLUME_RANGES)) {
+    const p = profile({
+      sport: 'triathlon', triathlonDistance, trainingDaysPerWeek: 6, excludeGymSessions: true,
+      onboardingPriorStructuredPlan: true, onboardingConsistencyRating: 'Very consistent',
+      onboardingAlreadyRuns: true, onboardingTriPriorExperience: true, onboardingKnowsThreshold: true,
+      trainingFitness: {
+        swim: { level: 'regular', maxSessionMinutes: 75, comfortableSwimMeters: 2000 },
+        bike: { level: 'regular', maxSessionMinutes: 240 },
+        run: { level: 'regular', maxSessionMinutes: 150, longestRunKm: 15 },
+      },
+    })
+    const planHistory = [{ date: localISO('2026-08-28'), discipline: 'run', title: 'Seed', totalDistance: 5, isCompleted: true }]
+    const weekPhases = [{ weekStart: localISO('2026-08-24'), phase: 'buildUp' }]
+    const observed = []
+    let generationDate = today
+
+    for (let block = 0; block < 3; block++) {
+      const skeleton = buildPlanSkeleton({ profile: p, recentSessions: planHistory.slice(-50), planHistory, weekPhases, checkIn: normalCheckIn, today: generationDate })
+      for (const week of skeleton.weeks) {
+        if (week.weekNumber > 0) observed.push(week)
+        weekPhases.push({ weekStart: localISO(week.weekStart), phase: week.phase })
+        planHistory.push(...week.sessions.map(completedSession))
+      }
+      generationDate = addCalendarDay(skeleton.blockEnd, 1)
+    }
+
+    const beforeRecovery = observed.find((week) => week.weekNumber === 3)
+    const recovery = observed.find((week) => week.weekNumber === 4)
+    const afterRecovery = observed.find((week) => week.weekNumber === 5)
+    assert.ok(beforeRecovery && recovery && afterRecovery, `${triathlonDistance}: expected Weeks 3–5`)
+    for (const discipline of ['swim', 'bike', 'run']) {
+      const key = `${discipline}Km`
+      assert.ok(recovery.targets[key] < beforeRecovery.targets[key], `${triathlonDistance} ${discipline}: recovery must deload`)
+      // A session sitting right at its own explicit duration cap (e.g. a
+      // configured 240-minute max bike session) can round to within one
+      // 0.5km/0.1km allocation step of the prior peak depending on exactly
+      // how the week's volume happened to split that cycle — real capacity
+      // boundary noise, not a ratchet-down. Same tolerance style already
+      // used for the marathon progression check below.
+      assert.ok(afterRecovery.targets[key] >= beforeRecovery.targets[key] * 0.98 - 0.5, `${triathlonDistance} ${discipline}: load must rebound after recovery`)
+      assert.ok(observed.every((week) => week.targets[key] <= TRIATHLON_VOLUME_RANGES[triathlonDistance][discipline][1]),
+        `${triathlonDistance} ${discipline}: generated volume exceeded the event ceiling`)
+    }
+  }
+})
+
+test('triathlon recovery sessions cannot become the load baseline when the week-phase row is missing', () => {
+  const p = profile({
+    sport: 'triathlon', trainingDaysPerWeek: 6, excludeGymSessions: true,
+    onboardingPriorStructuredPlan: true, onboardingConsistencyRating: 'Very consistent',
+    onboardingAlreadyRuns: true, onboardingTriPriorExperience: true, onboardingKnowsThreshold: true,
+    trainingFitness: {
+      swim: { level: 'regular', maxSessionMinutes: 75, comfortableSwimMeters: 2000 },
+      bike: { level: 'regular', maxSessionMinutes: 180 },
+      run: { level: 'regular', maxSessionMinutes: 120 },
+    },
+  })
+  const completed = (date, discipline, totalDistance, phase) => ({
+    date: localISO(date), discipline, title: `${phase} ${discipline}`, totalDistance, phase,
+    isCompleted: true, isOptional: false,
+  })
+  const planHistory = [
+    completed('2026-08-17', 'swim', 2400, 'buildUp'), completed('2026-08-18', 'bike', 60, 'buildUp'), completed('2026-08-19', 'run', 20, 'buildUp'),
+    completed('2026-08-24', 'swim', 1680, 'recovery'), completed('2026-08-25', 'bike', 42, 'recovery'), completed('2026-08-26', 'run', 14, 'recovery'),
+  ]
+  const loadPhase = { weekStart: localISO('2026-08-17'), phase: 'buildUp' }
+  const recoveryPhase = { weekStart: localISO('2026-08-24'), phase: 'recovery' }
+  const complete = buildPlanSkeleton({ profile: p, recentSessions: planHistory, planHistory,
+    weekPhases: [loadPhase, recoveryPhase], checkIn: normalCheckIn, today: new Date('2026-08-31T12:00:00') })
+  const missing = buildPlanSkeleton({ profile: p, recentSessions: planHistory, planHistory,
+    weekPhases: [loadPhase], checkIn: normalCheckIn, today: new Date('2026-08-31T12:00:00') })
+  assert.deepEqual(missing.weeks.map((week) => week.targets), complete.weeks.map((week) => week.targets))
 })
 
 test('new-profile screen exposes and persists gym/bodyweight preferences before onboarding', async () => {

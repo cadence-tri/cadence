@@ -331,3 +331,44 @@ test('triathlon run/bike volume does not ratchet down block over block when sess
     }
   }
 })
+
+test('triathlon within-block holds preserve weekly run and bike dose without inflating the brick', () => {
+  const profile = marathonProfile({
+    sport: 'triathlon', triathlonDistance: 'olympic', competitionDate: '2027-04-25', trainingDaysPerWeek: 6,
+    longSessionDays: [2, 4, 1], excludeGymSessions: true, onboardingPoolDaysPerWeek: '3',
+    onboardingPriorStructuredPlan: true, onboardingConsistencyRating: 'Very consistent',
+    onboardingTriPriorExperience: true, onboardingAlreadyRuns: true, onboardingKnowsThreshold: true,
+    trainingFitness: {
+      swim: { level: 'regular' }, bike: { level: 'regular' }, run: { level: 'regular', longestRunKm: 15 },
+    },
+  })
+  const result = simulateSeason({ profile, start: '2026-09-01', feedback: null, maxBlocks: 8 })
+  assert.deepEqual(result.summary.errors, [])
+
+  const heldWeeks = result.weeks.filter((week) => week.progressionNotes.includes('Within-block workload held; the next block will reassess. No automatic weekly speed increase.'))
+  assert.ok(heldWeeks.length >= 4)
+  for (const week of heldWeeks) {
+    const previous = result.weeks[result.weeks.indexOf(week) - 1]
+    if (!previous || ['recovery', 'taper'].includes(week.phase)) continue
+    assert.equal(week.targets.runKm, previous.targets.runKm, `Week ${week.weekNumber}: held run volume changed`)
+    assert.equal(week.targets.bikeKm, previous.targets.bikeKm, `Week ${week.weekNumber}: held bike volume changed`)
+  }
+
+  const before = result.weeks.find((week) => week.weekNumber === 5)
+  const held = result.weeks.find((week) => week.weekNumber === 6)
+  const beforeBrick = before.sessions.find((session) => session.discipline === 'brick')
+  const heldBrick = held.sessions.find((session) => session.discipline === 'brick')
+  const heldRun = held.sessions.find((session) => session.discipline === 'run')
+  assert.equal(held.targets.runKm, 14.5)
+  assert.equal(heldBrick.brickTargets.runKm, beforeBrick.brickTargets.runKm, 'the brick must not absorb the restored distance')
+  assert.ok(heldRun.endurancePrescription.steps.some((step) => step.stepType === 'easy' && step.exercise === 'Easy aerobic work'),
+    'the standalone quality run should carry the held remainder as easy aerobic work')
+
+  const constrained = simulateSeason({ profile: {
+    ...profile,
+    trainingFitness: { ...profile.trainingFitness, run: { ...profile.trainingFitness.run, maxSessionMinutes: 45 } },
+  }, start: '2026-09-01', feedback: null, maxBlocks: 4 })
+  assert.deepEqual(constrained.summary.errors, [])
+  assert.ok(constrained.weeks.flatMap((week) => week.sessions).filter((session) => session.discipline === 'run')
+    .every((session) => session.targetDurationMin <= 45), 'held volume must not bypass the explicit run-duration limit')
+})

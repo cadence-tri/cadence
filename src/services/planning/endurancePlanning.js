@@ -45,6 +45,36 @@ function setTriDisciplineTotal(week, discipline, totalKm) {
   portions.forEach((portion, index) => portion.set(allocations[index]))
   week.targets[`${discipline}Km`] = round(allocations.reduce((sum, value) => sum + value, 0), step)
 }
+
+function triDisciplineTotal(week, discipline) {
+  return week.sessions.filter((session) => !session.isRace).reduce((sum, session) => sum
+    + (session.discipline === discipline
+      ? session.targetDistanceKm ?? 0
+      : session.discipline === 'brick'
+        ? session.brickTargets?.[`${discipline}Km`] ?? 0
+        : 0), 0)
+}
+
+// A within-block hold applies to the weekly dose, not independently to each
+// allocation bucket. The preceding week may already have moved distance out
+// of a capped brick and onto standalone work. Capping the next week's brick
+// and standalone portions separately can therefore discard that moved
+// distance even though the weekly budget is meant to hold. Restore only the
+// missing standalone portion here; the brick stays capped and the canonical
+// prescription below turns the added duration into easy aerobic work around
+// unchanged quality repetitions. Explicit session-duration limits still run
+// afterward and may legitimately leave a smaller final total.
+function restoreHeldTriBudget(week, discipline, heldTotalKm) {
+  const step = discipline === 'swim' ? 0.1 : 0.5
+  const shortfall = round(Math.max(0, heldTotalKm - triDisciplineTotal(week, discipline)), step)
+  if (!shortfall) return
+  const standalone = week.sessions.filter((session) => session.discipline === discipline && !session.isRace)
+  if (!standalone.length) return
+  const boosts = allocateRoundedTotal(shortfall, standalone.map(() => 1), step)
+  standalone.forEach((session, index) => {
+    session.targetDistanceKm = round((session.targetDistanceKm ?? 0) + boosts[index], step)
+  })
+}
 const isReduced = (week, checkIn) => ['recovery', 'taper'].includes(week.phase) || checkIn.recovery !== 'normal'
   || checkIn.previousBlockLoad === 'tooHard' || checkIn.painLevel !== 'none'
 const normalCheckIn = (raw) => ({ recovery: 'normal', previousBlockLoad: 'aboutRight', painLevel: 'none', ...raw })
@@ -455,6 +485,7 @@ export function applyEndurancePlanning({ profile, weeks, history, today, checkIn
     && (s.endurancePrescription?.feedbackRequired || s.endurancePrescription?.sessionRole === 'long' || s.discipline === 'brick')).map((s) => s.date)
   let previousLoadWeek = null
   for (const week of weeks) {
+    const heldTriTargets = {}
     week.progressionNotes = week.marathonPlan ? [week.marathonPlan.message] : []
     // The scheduler creates both weeks before prescriptions apply session
     // capacity. For triathlon recovery in Week 2, derive the deload from Week
@@ -498,6 +529,15 @@ export function applyEndurancePlanning({ profile, weeks, history, today, checkIn
       const priorBrick = previousLoadWeek.sessions.find((s) => s.discipline === 'brick')
       for (const s of week.sessions.filter((s) => s.discipline === 'brick')) {
         for (const disc of ['bike', 'run']) if (priorBrick) s.brickTargets[`${disc}Km`] = Math.min(s.brickTargets[`${disc}Km`], priorBrick.brickTargets[`${disc}Km`])
+      }
+      if (profile.sport === 'triathlon') {
+        for (const disc of ['bike', 'run']) {
+          const key = `${disc}Km`
+          const heldTarget = Math.min(week.targets[key] ?? Infinity, previousLoadWeek.targets[key] ?? Infinity)
+          if (!Number.isFinite(heldTarget)) continue
+          restoreHeldTriBudget(week, disc, heldTarget)
+          heldTriTargets[key] = heldTarget
+        }
       }
       week.progressionNotes.push('Within-block workload held; the next block will reassess. No automatic weekly speed increase.')
     }
@@ -581,6 +621,10 @@ export function applyEndurancePlanning({ profile, weeks, history, today, checkIn
     for (const disc of DISCIPLINES) {
       if (!( `${disc}Km` in week.targets)) continue
       week.targets[`${disc}Km`] = round(week.sessions.filter(s => !s.isRace).reduce((sum, s) => sum + (s.discipline === disc ? s.targetDistanceKm ?? 0 : s.discipline === 'brick' ? s.brickTargets?.[`${disc}Km`] ?? 0 : 0), 0), disc === 'swim' ? 0.025 : 0.5)
+      const heldTarget = heldTriTargets[`${disc}Km`]
+      if (heldTarget != null && week.targets[`${disc}Km`] < heldTarget - (disc === 'swim' ? 0.025 : 0.5) / 2) {
+        week.progressionNotes.push(`${disc}: weekly volume remains below the held target because the available standalone session capacity is binding.`)
+      }
     }
     week.requiredTargets = Object.fromEntries(DISCIPLINES.filter((d) => `${d}Km` in week.targets).map((d) => [`${d}Km`, round(week.sessions.filter((s) => !s.isOptional && !s.isRace).reduce((sum, s) => sum + (s.discipline === d ? s.targetDistanceKm ?? 0 : s.discipline === 'brick' ? s.brickTargets?.[`${d}Km`] ?? 0 : 0), 0), d === 'swim' ? 0.025 : 0.5)]))
     for (const s of week.sessions) if (s.endurancePrescription) {

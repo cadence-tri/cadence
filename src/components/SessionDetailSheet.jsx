@@ -19,6 +19,16 @@ import {
 import { startOfWeekMon, addDays, asDate, isSameDay } from '../services/dateUtils'
 import { db } from '../db/db'
 import { runStepPresentation, runWorkoutOverview } from './runPrescriptionPresentation'
+import {
+  bikeStepPresentation,
+  bikeWorkoutOverview,
+  swimStepPresentation,
+  swimWorkoutOverview,
+  gymStepPresentation,
+  gymWorkoutSummary,
+  brickStepPresentation,
+  brickWorkoutOverview,
+} from './otherPrescriptionPresentation'
 
 /** Editable form for one prescribed item. Field set depends on
  * discipline: gym gets sets/reps/weight, everything else (swim/bike/run/
@@ -135,10 +145,12 @@ function GymLoadControl({ set, onWeightChange }) {
   )
 }
 
-function SetRow({ set, color, discipline, runView, showLoadControl, onSetStatus, onWeightChange }) {
+function SetRow({ set, color, discipline, view, showLoadControl, onSetStatus, onWeightChange }) {
   const setStatus = (status) => () => onSetStatus(status)
   const addressed = set.isCompleted || set.isSkipped
-  const itemName = runView?.label || set.exercise || 'step'
+  const itemName = view?.label || set.exercise || 'step'
+  const details = view?.details ?? [view?.target, view?.rpe].filter(Boolean)
+  const note = view && Object.hasOwn(view, 'note') ? view.note : set.notes
 
   return (
     <div className="flex items-start gap-2 py-2">
@@ -159,17 +171,20 @@ function SetRow({ set, color, discipline, runView, showLoadControl, onSetStatus,
       <div className="flex-1 min-w-0 py-1">
         <div className="flex items-start gap-2">
           <div className="flex-1 min-w-0">
-            {runView ? (
+            {view ? (
               <div className={`min-w-0 ${addressed ? 'line-through text-minor-text' : ''}`}>
                 <div className="flex items-baseline gap-x-1.5 flex-wrap">
-                  <span className={`text-sm font-semibold ${addressed ? '' : 'text-main-text'}`}>{runView.label}</span>
-                  {runView.quantity && <span className={`text-sm ${addressed ? '' : 'text-main-text'}`}>· {runView.quantity}</span>}
+                  <span className={`text-sm font-semibold ${addressed ? '' : 'text-main-text'}`}>{view.label}</span>
+                  {view.quantity && <span className={`text-sm ${addressed ? '' : 'text-main-text'}`}>· {view.quantity}</span>}
                 </div>
-                {(runView.target || runView.rpe) && (
+                {details.length > 0 && (
                   <div className="mt-0.5 flex items-center gap-1.5 flex-wrap text-xs text-minor-text">
-                    {runView.target && <span>{runView.target}</span>}
-                    {runView.target && runView.rpe && <span aria-hidden="true">·</span>}
-                    {runView.rpe && <span>{runView.rpe}</span>}
+                    {details.map((detail, index) => (
+                      <span key={`${detail}-${index}`} className="contents">
+                        {index > 0 && <span aria-hidden="true">·</span>}
+                        <span>{detail}</span>
+                      </span>
+                    ))}
                   </div>
                 )}
               </div>
@@ -191,9 +206,9 @@ function SetRow({ set, color, discipline, runView, showLoadControl, onSetStatus,
             </span>
           </button>
         </div>
-        {set.notes && (
+        {note && (
           <p className={`mt-1 w-full text-xs text-minor-text ${set.isSkipped ? 'line-through opacity-65' : ''}`}>
-            {set.notes}
+            {note}
           </p>
         )}
         {discipline === 'gym' && showLoadControl && (
@@ -204,9 +219,7 @@ function SetRow({ set, color, discipline, runView, showLoadControl, onSetStatus,
   )
 }
 
-function RunWorkoutSummary({ sets }) {
-  const entries = runWorkoutOverview(sets)
-  const hasEffortGuidance = runStepPresentation(sets).some((step) => step.rpe)
+function WorkoutSummary({ entries, guidance }) {
   if (!entries.length) return null
 
   return (
@@ -223,16 +236,67 @@ function RunWorkoutSummary({ sets }) {
           </div>
         ))}
       </div>
-      {hasEffortGuidance && (
+      {guidance && (
         <details className="mt-2.5 border-t border-minor-text/15 pt-2 text-xs text-minor-text">
           <summary className="cursor-pointer font-semibold text-main-text">Effort guidance</summary>
-          <p className="mt-1.5 leading-relaxed">
-            Pace is a target, not an obligation. Stay within the prescribed effort range and slow down when fatigue, terrain, or conditions require it.
-          </p>
+          <p className="mt-1.5 leading-relaxed">{guidance}</p>
         </details>
       )}
     </div>
   )
+}
+
+function SessionWorkoutSummary({ session }) {
+  const sets = session.sets ?? []
+  if (session.discipline === 'gym') {
+    const summary = gymWorkoutSummary(session)
+    if (!summary) return null
+    return (
+      <div className="mb-2.5 rounded-xl border border-minor-text/15 bg-panel px-3 py-2.5">
+        <div className="flex flex-wrap gap-x-2 gap-y-1 text-xs text-main-text">
+          {summary.metrics.map((metric, index) => (
+            <span key={metric} className="flex items-center gap-2">
+              {index > 0 && <span className="text-minor-text" aria-hidden="true">·</span>}
+              <span>{metric}</span>
+            </span>
+          ))}
+        </div>
+        {summary.note && <p className="mt-1.5 text-xs text-minor-text">{summary.note}</p>}
+      </div>
+    )
+  }
+
+  let entries = []
+  let views = []
+  let guidance = null
+  if (session.discipline === 'run') {
+    entries = runWorkoutOverview(sets)
+    views = runStepPresentation(sets)
+    guidance = 'Pace is a target, not an obligation. Stay within the prescribed effort range and slow down when fatigue, terrain, or conditions require it.'
+  } else if (session.discipline === 'bike') {
+    entries = bikeWorkoutOverview(sets)
+    views = bikeStepPresentation(sets)
+    guidance = 'Power is a target, not an obligation. Stay within the prescribed effort range and ease off when fatigue, terrain, traffic, or conditions require it.'
+  } else if (session.discipline === 'swim') {
+    entries = swimWorkoutOverview(sets)
+    views = swimStepPresentation(sets)
+    guidance = 'Pace is secondary to technique. Stay within the prescribed effort range, extend rest when needed, and stop a repetition if stroke quality deteriorates.'
+  } else if (session.discipline === 'brick') {
+    entries = brickWorkoutOverview(sets)
+    views = brickStepPresentation(sets)
+    guidance = 'Treat both targets as guides. Keep the bike controlled so the run begins smoothly, and ease off whenever fatigue, safety, terrain, or conditions require it.'
+  }
+  return <WorkoutSummary entries={entries} guidance={views.some((step) => step.rpe) ? guidance : null} />
+}
+
+function sessionStepPresentation(session) {
+  const sets = session.sets ?? []
+  if (session.discipline === 'run') return runStepPresentation(sets)
+  if (session.discipline === 'bike') return bikeStepPresentation(sets)
+  if (session.discipline === 'swim') return swimStepPresentation(sets)
+  if (session.discipline === 'gym') return gymStepPresentation(sets)
+  if (session.discipline === 'brick') return brickStepPresentation(sets)
+  return []
 }
 
 /** Mon–Sun day picker for moving a session within its own week — life
@@ -286,7 +350,7 @@ export default function SessionDetailSheet({ session, onClose }) {
   const allPrescribedDone = local.sets?.length > 0
     ? local.sets.every((set) => set.isCompleted)
     : !!local.isCompleted
-  const runViews = local.discipline === 'run' ? runStepPresentation(local.sets) : []
+  const stepViews = sessionStepPresentation(local)
 
   const persist = async (patch) => {
     const updated = { ...local, ...patch }
@@ -397,14 +461,14 @@ export default function SessionDetailSheet({ session, onClose }) {
                 {isEditing ? 'Done' : 'Edit'}
               </button>
             </div>
-            {!isEditing && local.discipline === 'run' && <RunWorkoutSummary sets={local.sets} />}
+            {!isEditing && <SessionWorkoutSummary session={local} />}
             <div className="bg-panel rounded-xl px-3 flex flex-col divide-y divide-minor-text/15">
               {local.sets.map((set, i) =>
                 isEditing ? (
                   <EditableSetRow key={i} set={set} discipline={local.discipline}
-                    displayLabel={runViews[i]?.label} onChange={(s) => editSet(i, s)} />
+                    displayLabel={stepViews[i]?.label} onChange={(s) => editSet(i, s)} />
                 ) : (
-                  <SetRow key={i} set={set} color={color} discipline={local.discipline} runView={runViews[i]}
+                  <SetRow key={i} set={set} color={color} discipline={local.discipline} view={stepViews[i]}
                     showLoadControl={local.discipline === 'gym' && local.strengthPrescription?.equipment !== 'bodyweight'}
                     onSetStatus={(status) => setStepStatus(i, status)} onWeightChange={(weightKg) => logGymLoad(i, weightKg)} />
                 )

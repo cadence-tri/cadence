@@ -1,3 +1,5 @@
+import { parseDecimal, appendAthleteStep } from '../services/sessionAdditions'
+import { STRENGTH_SLOT_LABELS } from '../services/planning/strengthPlanning'
 import { useState } from 'react'
 import WorkoutResultForm from './WorkoutResultForm'
 import { CheckCircle2 } from 'lucide-react'
@@ -29,6 +31,71 @@ import {
   brickStepPresentation,
   brickWorkoutOverview,
 } from './otherPrescriptionPresentation'
+
+function DecimalLoadInput({ value, onSave, onDone = () => {}, label, autoFocus = false }) {
+  const [draft, setDraft] = useState(value == null ? '' : String(value))
+  const [error, setError] = useState(false)
+  return <span>
+    <input type="text" inputMode="decimal" autoFocus={autoFocus} value={draft}
+      aria-label={label} aria-invalid={error}
+      onChange={e => { setDraft(e.target.value); setError(false) }}
+      onBlur={() => {
+        const parsed = parseDecimal(draft)
+        if (Number.isNaN(parsed)) { setError(true); return }
+        onSave(parsed); onDone()
+      }}
+      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur() } }}
+      className="w-24 border border-minor-text/30 rounded-lg bg-background px-2 py-1 text-sm text-main-text" />
+    {error && <span role="alert" className="block text-xs text-red-600">Use a positive weight, e.g. 62.5 or 62,5.</span>}
+  </span>
+}
+
+function AddStepForm({ discipline, onAdd, onCancel }) {
+  const gym = discipline === 'gym'
+  const [draft, setDraft] = useState({ exercise: '', setsCount: '1', reps: '', weightKg: '', distanceM: '', duration: '', slot: '', isCompleted: true })
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const field = (key, label, numeric = false) => <label className="flex flex-col gap-1 text-xs text-minor-text">
+    {label}<input value={draft[key]} inputMode={numeric ? 'decimal' : 'text'}
+      onChange={e => setDraft({ ...draft, [key]: e.target.value })}
+      className="w-full rounded-lg border border-minor-text/30 bg-background p-2 text-main-text" />
+  </label>
+  return <form className="rounded-xl bg-panel p-3 flex flex-col gap-3" onSubmit={async e => {
+    e.preventDefault()
+    if (saving) return
+    const step = { ...draft }
+    for (const key of ['setsCount', ...(gym ? ['reps', 'weightKg'] : ['distanceM'])]) {
+      step[key] = parseDecimal(draft[key])
+      if (Number.isNaN(step[key]) || (['setsCount', 'reps'].includes(key) && step[key] != null && (!Number.isInteger(step[key]) || step[key] < 1))) {
+        setError('Use positive whole numbers for sets/reps and valid decimal numbers for load/distance.'); return
+      }
+    }
+    if (!step.exercise.trim()) { setError('Enter a name.'); return }
+    if (!gym) { delete step.reps; delete step.weightKg }
+    if (gym) delete step.distanceM
+    if (!step.slot) delete step.slot
+    step.isCore = step.slot === 'core'
+    setSaving(true)
+    try { await onAdd(step) } catch { setError('Could not save. Please try again.'); setSaving(false) }
+  }}>
+    {field('exercise', gym ? 'Exercise name' : 'Step name')}
+    <div className="grid grid-cols-2 gap-3">
+      {field('setsCount', 'Sets / repetitions', true)}
+      {gym ? <>{field('reps', 'Reps per set', true)}{field('weightKg', 'Actual load (kg)', true)}</> : field('distanceM', 'Distance per repetition (m)', true)}
+      {field('duration', 'Duration (e.g. 5 min)')}
+    </div>
+    {gym && <label className="text-xs text-minor-text">Movement category
+      <select value={draft.slot} onChange={e => setDraft({ ...draft, slot: e.target.value })} className="mt-1 w-full bg-background rounded-lg p-2 text-main-text">
+        <option value="">Other / unsure</option>
+        {Object.entries(STRENGTH_SLOT_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+      </select>
+      <span className="block mt-1">Choose a category to use this exercise and its logged load in future matching sessions.</span>
+    </label>}
+    <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.isCompleted} onChange={e => setDraft({ ...draft, isCompleted: e.target.checked })} />Already completed</label>
+    {error && <p role="alert" className="text-xs text-red-600">{error}</p>}
+    <div className="flex gap-4"><button disabled={saving} className="text-accent font-semibold">{saving ? 'Saving…' : 'Add'}</button><button type="button" onClick={onCancel}>Cancel</button></div>
+  </form>
+}
 
 /** Editable form for one prescribed item. Field set depends on
  * discipline: gym gets sets/reps/weight, everything else (swim/bike/run/
@@ -73,7 +140,7 @@ function EditableSetRow({ set, discipline, displayLabel, onChange }) {
           <>
             {numField('setsCount', 'sets')}
             {numField('reps', 'reps')}
-            {numField('weightKg', 'kg')}
+            <label className="text-xs text-minor-text">kg<DecimalLoadInput value={set.weightKg} onSave={weightKg => onChange({ ...set, weightKg })} label={`Load for ${set.exercise}`} /></label>
           </>
         ) : (
           <>
@@ -110,21 +177,10 @@ function GymLoadControl({ set, onWeightChange }) {
   const action = loadActionLabel(set.loadAction)
 
   if (editing) return (
-    <label className="w-full flex items-center gap-2 mt-1 text-xs text-minor-text">
+    <label className="w-full flex flex-wrap items-center gap-2 mt-1 text-xs text-minor-text">
       Actual load
-      <input
-        autoFocus
-        type="number"
-        inputMode="decimal"
-        min="0"
-        step="0.5"
-        value={set.weightKg ?? ''}
-        onChange={(event) => onWeightChange(event.target.value === '' ? null : Number(event.target.value))}
-        onBlur={() => setEditing(false)}
-        onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
-        className="w-20 border border-minor-text/30 rounded-lg bg-background px-2 py-1 text-sm text-main-text outline-none focus:border-accent"
-        aria-label={`Actual load for ${set.exercise || 'gym exercise'} in kilograms`}
-      />
+      <DecimalLoadInput autoFocus value={set.weightKg} onSave={onWeightChange}
+        onDone={() => setEditing(false)} label={`Actual load for ${set.exercise || 'gym exercise'} in kilograms`} />
       kg
     </label>
   )
@@ -337,6 +393,7 @@ function DayPicker({ date, onPick }) {
  * comment). */
 export default function SessionDetailSheet({ session, onClose }) {
   const [isEditing, setIsEditing] = useState(false)
+  const [adding, setAdding] = useState(false)
   const [local, setLocal] = useState(session)
 
   const Icon = disciplineIcon(local.discipline)
@@ -354,8 +411,8 @@ export default function SessionDetailSheet({ session, onClose }) {
 
   const persist = async (patch) => {
     const updated = { ...local, ...patch }
-    setLocal(updated)
     await db.sessions.update(local.id, patch)
+    setLocal(updated)
   }
 
   const setStepStatus = (index, status) => {
@@ -465,11 +522,14 @@ export default function SessionDetailSheet({ session, onClose }) {
             <div className="bg-panel rounded-xl px-3 flex flex-col divide-y divide-minor-text/15">
               {local.sets.map((set, i) =>
                 isEditing ? (
-                  <EditableSetRow key={i} set={set} discipline={local.discipline}
-                    displayLabel={stepViews[i]?.label} onChange={(s) => editSet(i, s)} />
+                  <div key={i}>
+                    <EditableSetRow set={set} discipline={local.discipline}
+                      displayLabel={stepViews[i]?.label} onChange={(s) => editSet(i, s)} />
+                    {set.athleteAdded && <button type="button" className="min-h-11 text-xs text-accent" onClick={() => persist({ sets: local.sets.filter((_, index) => index !== i), workoutResult: null })}>Remove added {local.discipline === 'gym' ? 'exercise' : 'step'}</button>}
+                  </div>
                 ) : (
                   <SetRow key={i} set={set} color={color} discipline={local.discipline} view={stepViews[i]}
-                    showLoadControl={local.discipline === 'gym' && local.strengthPrescription?.equipment !== 'bodyweight'}
+                    showLoadControl={local.discipline === 'gym' && (set.athleteAdded || local.strengthPrescription?.equipment !== 'bodyweight')}
                     onSetStatus={(status) => setStepStatus(i, status)} onWeightChange={(weightKg) => logGymLoad(i, weightKg)} />
                 )
               )}
@@ -479,6 +539,12 @@ export default function SessionDetailSheet({ session, onClose }) {
             )}
           </div>
         )}
+
+        {adding ? <AddStepForm discipline={local.discipline} onCancel={() => setAdding(false)}
+          onAdd={async step => { await persist(appendAthleteStep(local, step)); setAdding(false) }} />
+          : <button type="button" onClick={() => setAdding(true)} className="min-h-11 text-accent font-semibold text-sm text-left">
+            {local.discipline === 'gym' ? '+ Add exercise' : '+ Add step'}
+          </button>}
 
         {local.notes && (
           <div>

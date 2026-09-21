@@ -51,7 +51,7 @@ const completedLoad = (session, set) => set?.isCompleted && !set?.isSkipped
 export function strengthLoadPlan({ prescription, history = [], checkIn = {} }) {
   return prescription.exerciseSlots.map(slot => {
     const evidence = history.filter(session => session.discipline === 'gym')
-      .flatMap(session => (session.sets ?? []).filter(set => set.slot === slot && set.exercise)
+      .flatMap(session => (session.sets ?? []).filter(set => (set.slot === slot || (set.athleteAdded && ((slot === 'squatOrHinge' && ['squat', 'hinge'].includes(set.slot)) || (slot === 'singleLegOrCarry' && set.slot === 'singleLeg')))) && set.exercise && (!set.athleteAdded || (set.isCompleted && !set.isSkipped)))
         .map(set => ({ session, set })))
       .sort((a, b) => String(a.session.date).localeCompare(String(b.session.date)))
     const latest = evidence.at(-1)

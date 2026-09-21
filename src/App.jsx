@@ -4,6 +4,8 @@ import { Calendar, ChartLine, GraduationCap, UserRound } from 'lucide-react'
 import { db, PROFILE_ID } from './db/db'
 import SplashScreen from './screens/SplashScreen'
 import LoginScreen from './screens/LoginScreen'
+import InstallationScreen from './screens/InstallationScreen'
+import { isStandaloneApp, readInstallIntroSeen, writeInstallIntroSeen } from './services/installIntro'
 import DailyScreen from './screens/DailyScreen'
 import StatsScreen from './screens/StatsScreen'
 import ImportScreen from './screens/ImportScreen'
@@ -102,6 +104,8 @@ function MainTabView({ profile }) {
 
 export default function App() {
   const [showSplash, setShowSplash] = useState(true)
+  const [installIntroSeen, setInstallIntroSeen] = useState(() =>
+    readInstallIntroSeen(typeof window === 'undefined' ? null : window.localStorage))
   // useLiveQuery returns `undefined` while the first query is still in
   // flight — but a fresh install's query also legitimately resolves to
   // "no profile yet". Wrapping the result disambiguates those two states:
@@ -115,6 +119,17 @@ export default function App() {
   }, [])
 
   if (showSplash || result === undefined) return <SplashScreen />
+
+  const standalone = typeof window !== 'undefined' && isStandaloneApp({
+    matchesDisplayMode: window.matchMedia?.('(display-mode: standalone)').matches,
+    navigatorStandalone: window.navigator?.standalone === true,
+  })
+  if (!result.profile && !installIntroSeen && !standalone) {
+    return <InstallationScreen onContinue={() => {
+      writeInstallIntroSeen(window.localStorage)
+      setInstallIntroSeen(true)
+    }} />
+  }
 
   return (
     <div className="h-[100dvh] w-full max-w-lg mx-auto bg-background">

@@ -114,3 +114,12 @@ input[type="number"] {
   min-width: 0;
   max-width: 100%;
 }
+
+/* The installation artwork has a fixed 804:1982 canvas. Size it from the
+   smaller viewport dimension so it never crops or causes page scrolling. */
+.installation-figure {
+  position: relative;
+  width: min(100vw, calc(100svh * 804 / 1982), 402px);
+  aspect-ratio: 804 / 1982;
+  flex: none;
+}

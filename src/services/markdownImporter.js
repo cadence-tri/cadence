@@ -163,10 +163,99 @@ function decodeSet(raw) {
  * — pure and unit-testable. Returns the sessions/weekPhases to insert plus
  * an ImportSummary-shaped object. */
 export function parseMarkdown(markdown, existingSessions, existingWeekPhases, skeleton = null) {
+  // Keep valid JSON unchanged. Repair escaped structural brackets only
+  // outside strings, and accept the repair only if JSON.parse succeeds.
+  const repairJson = (text) => {
+    try {
+      JSON.parse(text)
+      return text
+    } catch {
+      // Try the narrow clipboard-formatting repair below.
+    }
+
+    let result = ''
+    let inString = false
+    let escaped = false
+
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i]
+
+      if (inString) {
+        result += c
+        if (escaped) escaped = false
+        else if (c === '\\') escaped = true
+        else if (c === '"') inString = false
+      } else if (c === '"') {
+        inString = true
+        result += c
+      } else if (
+        c === '\\' &&
+        (text[i + 1] === '[' || text[i + 1] === ']')
+      ) {
+        result += text[++i]
+      } else {
+        result += c
+      }
+    }
+
+    try {
+      JSON.parse(result)
+      return result
+    } catch {
+      return null
+    }
+  }
+
+  const originalText = markdown
+  const trimmed = markdown.trim()
+  const repairedRaw = repairJson(trimmed)
+
+  if (repairedRaw !== null) {
+    markdown = repairedRaw
+  } else {
+    // Unwrap a complete JSON/session code fence, including an unlabeled
+    // fence copied by a chat client's "Copy response" button.
+    const outerFence = trimmed.match(
+      /^(`{3,}|~{3,})[ \t]*(?:json|session)?[ \t]*\r?\n([\s\S]*?)\r?\n\1[ \t]*$/i
+    )
+    const repairedBody = outerFence
+      ? repairJson(outerFence[2].trim())
+      : null
+
+    if (repairedBody !== null) {
+      markdown = repairedBody
+    } else {
+      // Preserve mixed Markdown and legacy session blocks. Repair each
+      // fenced JSON body independently without touching surrounding prose.
+      markdown = markdown.replace(
+        /^(`{3,}|~{3,})[ \t]*(json|session)?[ \t]*\r?\n([\s\S]*?)\r?\n\1[ \t]*(?=\r?$)/gim,
+        (whole, fence, label, body) => {
+          const repaired = repairJson(body.trim())
+          if (repaired === null) return whole
+          return '```' + (label ?? '').toLowerCase() + '\n' + repaired + '\n```'
+        }
+      )
+    }
+  }
+
+  const formattingRepaired = markdown !== originalText
+  // Do not catch validation errors here: block IDs, session IDs and the
+  // locked scheduler contract must still be checked by the existing code.
   const expanded = expandCoachReply(markdown, skeleton)
   if (expanded) markdown = '```session\n' + JSON.stringify(expanded.sessions) + '\n```'
+
   const blocks = extractSessionBlocks(markdown)
-  const summary = { imported: 0, skippedDuplicates: 0, failedItems: [], warnings: [...(expanded?.warnings ?? [])] }
+  const summary = {
+    imported: 0,
+    skippedDuplicates: 0,
+    failedItems: [],
+    warnings: [...(expanded?.warnings ?? [])],
+  }
+
+  if (formattingRepaired) {
+    summary.warnings.push('Clipboard formatting was normalized before parsing; plan validation remains unchanged.')
+  }
+
   if (blocks.length === 0) {
     summary.failedItems.push(
       "No training sessions found in this text. Make sure you pasted your coach's entire reply, including the JSON — it's fine if the ```session code-block formatting got stripped along the way (e.g. by some chat apps' copy behavior), the important part is that the JSON with each session's date/discipline/title is included somewhere in the pasted text."
@@ -174,10 +263,14 @@ export function parseMarkdown(markdown, existingSessions, existingWeekPhases, sk
     return { newSessions: [], newWeekPhases: [], summary }
   }
 
-  const existingKeys = new Set(existingSessions.map((s) => s.importKey))
-  const existingScheduleIds = new Set(existingSessions.map(s => s.schedulerSessionId ?? s.endurancePrescription?.id?.replace(/^endurance-v1:/, '')).filter(Boolean))
+  const existingKeys = new Set(existingSessions.map(s => s.importKey))
+  const existingScheduleIds = new Set(
+    existingSessions
+      .map(s => s.schedulerSessionId ?? s.endurancePrescription?.id?.replace(/^endurance-v1:/, ''))
+      .filter(Boolean)
+  )
   const labelledWeekStarts = new Set(
-    existingWeekPhases.map((wp) => toISODateString(startOfWeekMon(new Date(wp.weekStart))))
+    existingWeekPhases.map(wp => toISODateString(startOfWeekMon(new Date(wp.weekStart))))
   )
 
   const newSessions = []
@@ -231,11 +324,16 @@ export function parseMarkdown(markdown, existingSessions, existingWeekPhases, sk
       const weekLabel = toStringOrNull(rawItem.weekLabel)
       const skeletonId = toStringOrNull(rawItem.skeletonId)
       const skeletonRole = toStringOrNull(rawItem.skeletonRole)
-      const brickTargets = rawItem.brickTargets && typeof rawItem.brickTargets === 'object' ? rawItem.brickTargets : null
+      const brickTargets =
+        rawItem.brickTargets && typeof rawItem.brickTargets === 'object'
+          ? rawItem.brickTargets
+          : null
 
       const session = {
         endurancePrescriptionId: toStringOrNull(rawItem.endurancePrescriptionId),
-        ...(rawItem.endurancePrescription && typeof rawItem.endurancePrescription === 'object' ? { endurancePrescription: rawItem.endurancePrescription } : {}),
+        ...(rawItem.endurancePrescription && typeof rawItem.endurancePrescription === 'object'
+          ? { endurancePrescription: rawItem.endurancePrescription }
+          : {}),
         date: date.toISOString(),
         discipline: discipline ?? 'other',
         title,
@@ -249,8 +347,11 @@ export function parseMarkdown(markdown, existingSessions, existingWeekPhases, sk
         isOptional,
         totalDistance,
         ...(rawItem.strengthPrescription && typeof rawItem.strengthPrescription === 'object'
-          ? { strengthPrescription: rawItem.strengthPrescription } : {}),
-        ...(Array.isArray(rawItem.strengthLoadPlan) ? { strengthLoadPlan: rawItem.strengthLoadPlan } : {}),
+          ? { strengthPrescription: rawItem.strengthPrescription }
+          : {}),
+        ...(Array.isArray(rawItem.strengthLoadPlan)
+          ? { strengthLoadPlan: rawItem.strengthLoadPlan }
+          : {}),
         importKey: makeImportKey(date, discipline ?? 'other', title),
         ...(skeletonId ? { skeletonId } : {}),
         ...(skeletonId ? { schedulerSessionId: skeletonId } : {}),
@@ -264,6 +365,7 @@ export function parseMarkdown(markdown, existingSessions, existingWeekPhases, sk
       if (rawItem.phase) {
         const weekStart = startOfWeekMon(date)
         const weekKey = toISODateString(weekStart)
+
         if (!labelledWeekStarts.has(weekKey)) {
           const phase = parsePhase(rawItem.phase)
           if (phase) {
@@ -275,7 +377,10 @@ export function parseMarkdown(markdown, existingSessions, existingWeekPhases, sk
         }
       }
 
-      if (existingKeys.has(session.importKey) || (skeletonId && existingScheduleIds.has(skeletonId))) {
+      if (
+        existingKeys.has(session.importKey) ||
+        (skeletonId && existingScheduleIds.has(skeletonId))
+      ) {
         summary.skippedDuplicates += 1
         continue
       }

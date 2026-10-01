@@ -10,6 +10,7 @@ import { readPendingCoach, savePendingCoach, clearPendingCoach } from '../servic
 import { mostRecentBlock } from '../services/planBlockTrigger'
 import { capacityWarningMessage } from '../services/trainingCapacityWarning'
 import { importMarkdown } from '../services/markdownImporter'
+import { hasValidFitnessEstimate } from '../services/planning/fitness'
 
 /** Small yes/no toggle used throughout the first-time onboarding
  * questions below. `value` is `true` | `false` | `null` (unanswered). */
@@ -166,6 +167,7 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
   const effectiveGymExcluded = askGymQuestion ? includeGym === false : !!profile.excludeGymSessions
   const effectiveBodyweight = askBodyweightQuestion ? bodyweightSessions === true : !!profile.bodyweightOnlyStrength
   const strengthEnabled = !effectiveGymExcluded || effectiveBodyweight
+  const missingRunEstimate = !hasValidFitnessEstimate(fitnessProfile, 'run')
 
   const buildPrompt = async () => {
     setError(null)
@@ -589,6 +591,12 @@ export default function PlanGenerationWizardSheet({ profile, allSessions, weekPh
             )}
 
             {strengthEnabled && <StrengthFrequencyField value={strengthSessionsPerWeek} onChange={setStrengthSessionsPerWeek} />}
+            {missingRunEstimate && (
+              <div className="rounded-xl bg-accent/12 p-3">
+                <p className="text-sm font-semibold text-main-text">Run guidance: effort-led</p>
+                <p className="mt-1 text-xs text-minor-text">Without a confirmed running estimate, this block will use time and effort guidance instead of pace. Add one below, or leave it blank and log a measured pace in an Assessment session.</p>
+              </div>
+            )}
             <FitnessSettings profile={fitnessProfile} onChange={saveFitness} sessions={allSessions} />
             <label className="text-sm text-main-text">Assessment preference<select className={inputClass} value={assessment} onChange={(e) => setAssessment(e.target.value)}><option value="offer">One controlled checkpoint per discipline at each development phase</option><option value="skip">Skip phase checkpoints; keep ordinary training</option></select></label>
             <button onClick={buildPrompt} className="w-full py-2.5 rounded-xl bg-accent text-white font-semibold">

@@ -15,6 +15,9 @@ export const RACE_STAGES = {
   bike: [[2, 480, 180], [3, 480, 180], [3, 600, 180], [3, 720, 180], [3, 720, 150]],
   swim: [[4, 100, 30], [5, 100, 30], [6, 100, 30], [6, 125, 30], [6, 125, 25]],
 }
+// Distance-led race-specific work only when a pace baseline exists. Calendar
+// phase selects the family; comparable results, not phase, unlock its stage.
+export const RUN_RACE_DISTANCE_STAGES = [[2, 1000, 120], [3, 1000, 120], [3, 1500, 120], [3, 2000, 120], [4, 2000, 120]]
 const round = (n, step = 1) => Number((Math.round(n / step) * step).toFixed(6))
 
 function allocateRoundedTotal(total, weights, step) {
@@ -175,7 +178,8 @@ export function constrainSwimWeek({ profile, week, history, today, checkIn = {} 
 }
 
 function progressionDecision(profile, disc, history, today, checkIn, state, purpose = 'development') {
-  const family = `${disc}:${purpose}`
+  const family = disc === 'run' && purpose === 'raceSpecific' && state.workingValue != null
+    ? 'run:raceSpecific:distance-v1' : `${disc}:${purpose}`
   const evidence = evidenceFor(history, disc, today).filter((e) => e.prescription.family === family && e.prescription.baseline.value === state.value)
   const last = evidence[0]
   let stage = last?.prescription.loadStage ?? 0
@@ -420,7 +424,11 @@ function prescription(profile, session, week, state, decision, checkIn, goal, hi
       repetitions = 1; workRepSeconds = totalSeconds - warm - cool; recoverySeconds = 0
       add('work', easy, { seconds: workRepSeconds, label: session.role === 'long' ? 'Easy endurance' : 'Easy aerobic work' })
     } else {
-      const stages = (purpose === 'raceSpecific' ? RACE_STAGES : WORK_STAGES)[disc]
+      const distanceReps = disc === 'run' && purpose === 'raceSpecific' && target.high != null
+      const stages = distanceReps
+        ? RUN_RACE_DISTANCE_STAGES.map(([count, meters, rest]) => [count, Math.ceil(meters / 1000 * target.high), rest])
+        : (purpose === 'raceSpecific' ? RACE_STAGES : WORK_STAGES)[disc]
+      if (distanceReps) [repetitions, workRepSeconds, recoverySeconds] = stages[activeStage]
       while (activeStage > 0 && repetitions * workRepSeconds + (repetitions - 1) * recoverySeconds > totalSeconds - warm - cool) {
         activeStage--; stageLimited = true
         ;[repetitions, workRepSeconds, recoverySeconds] = stages[activeStage]
@@ -429,7 +437,10 @@ function prescription(profile, session, week, state, decision, checkIn, goal, hi
       while (repetitions > 1 && repetitions * workRepSeconds + (repetitions - 1) * recoverySeconds > totalSeconds - warm - cool) repetitions--
       workRepSeconds = Math.min(workRepSeconds, totalSeconds - warm - cool)
       for (let i = 0; i < repetitions; i++) {
-        add('work', target, { seconds: workRepSeconds, label: `${purpose} repetition ${i + 1}` })
+        const fullDistanceRep = distanceReps && workRepSeconds === stages[activeStage][1]
+        add('work', target, fullDistanceRep
+          ? { meters: RUN_RACE_DISTANCE_STAGES[activeStage][1], label: `Race-specific repetition ${i + 1}` }
+          : { seconds: workRepSeconds, label: `${purpose} repetition ${i + 1}` })
         if (i < repetitions - 1) add('recovery', easy, { seconds: recoverySeconds, label: 'Easy recovery' })
       }
       const spare = totalSeconds - warm - cool - repetitions * workRepSeconds - (repetitions - 1) * recoverySeconds

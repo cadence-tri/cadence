@@ -1,14 +1,20 @@
-import { useState } from 'react'
-import { DISCIPLINES, normalizeFitness, formatFitness, paceSeconds, updateFitness, baselineReview } from '../services/planning/fitness'
+import { useEffect, useState } from 'react'
+import { DISCIPLINES, normalizeFitness, formatFitness, paceSeconds, updateFitness, baselineReview, assessmentCandidate, hasValidFitnessEstimate } from '../services/planning/fitness'
 import { toISODateString } from '../services/dateUtils'
 
 const input = 'w-full p-2 rounded-lg bg-background text-main-text border border-minor-text/20'
 const names = { run: 'Running', bike: 'Cycling', swim: 'Swimming' }
-function FitnessDiscipline({ discipline, profile, onChange, sessions }) {
+function FitnessDiscipline({ discipline, profile, onChange, sessions, initiallyOpen = false }) {
   const current = normalizeFitness(profile.trainingFitness)[discipline]
-  const [value, setValue] = useState(current.value == null ? '' : discipline === 'bike' ? String(current.value) : formatFitness(current.value, discipline).split('/')[0])
-  const [source, setSource] = useState(current.source)
-  const [date, setDate] = useState(current.assessedOn ?? '')
+  const candidate = assessmentCandidate(profile, discipline, sessions)
+  const candidateValue = candidate?.value ?? null
+  const candidateDate = candidate?.assessedOn ?? ''
+  const candidateText = candidateValue == null ? '' : discipline === 'bike'
+    ? String(candidateValue) : formatFitness(candidateValue, discipline).split('/')[0]
+  const [open, setOpen] = useState(initiallyOpen)
+  const [value, setValue] = useState(current.value == null ? candidateText : discipline === 'bike' ? String(current.value) : formatFitness(current.value, discipline).split('/')[0])
+  const [source, setSource] = useState(current.value == null && candidate ? 'test' : current.source)
+  const [date, setDate] = useState(current.assessedOn ?? candidate?.assessedOn ?? '')
   const [level, setLevel] = useState(current.level)
   const [minutes, setMinutes] = useState(current.maxSessionMinutes ?? '')
   const [meters, setMeters] = useState(current.comfortableSwimMeters ?? '')
@@ -17,22 +23,35 @@ function FitnessDiscipline({ discipline, profile, onChange, sessions }) {
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
   const review = baselineReview(profile, discipline, sessions)
+
+  useEffect(() => {
+    if (current.value != null || candidateValue == null) return
+    setValue((previous) => {
+      if (previous !== '') return previous
+      setSource('test')
+      setDate(candidateDate)
+      return candidateText
+    })
+  }, [candidateValue, candidateDate, candidateText, current.value])
   const save = async () => {
     setError(''); setSaved(false)
     const parsed = value.trim() === '' ? null : discipline === 'bike' ? Number(value) : paceSeconds(value)
     if (value.trim() && (parsed == null || !Number.isFinite(parsed) || parsed <= 0)) { setError('Enter a valid pace such as 4:00, or FTP in watts.'); return }
     if (date > toISODateString(new Date()) || (parsed != null && source !== 'personal' && !date)) { setError('An assessment needs its date (not in the future).'); return }
     if ([weeklyKm, longKm].some(v => v !== '' && (!Number.isFinite(Number(v)) || Number(v) <= 0))) { setError('Capacity distances must be positive, or left blank.'); return }
-    const candidate = normalizeFitness({ [discipline]: { value: parsed, source, assessedOn: date, status: source === 'personal' ? 'provisional' : 'assessed', level, maxSessionMinutes: minutes, comfortableSwimMeters: meters, currentWeeklyKm: weeklyKm, longestRunKm: longKm } })[discipline]
-    if (parsed != null && candidate.value == null) { setError('That value is outside the supported range. Check the units.'); return }
+    const normalized = normalizeFitness({ [discipline]: { value: parsed, source, assessedOn: date, status: source === 'personal' ? 'provisional' : 'assessed', level, maxSessionMinutes: minutes, comfortableSwimMeters: meters, currentWeeklyKm: weeklyKm, longestRunKm: longKm } })[discipline]
+    if (parsed != null && normalized.value == null) { setError('That value is outside the supported range. Check the units.'); return }
     try {
-      await onChange(updateFitness(profile, discipline, candidate))
+      await onChange(updateFitness(profile, discipline, normalized))
       setSaved(true)
     } catch { setError('Could not save. Please try again.'); }
   }
-  return <details className="rounded-xl bg-panel p-3">
+  return <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)} className="rounded-xl bg-panel p-3">
     <summary className="cursor-pointer text-sm font-semibold">{names[discipline]} · {formatFitness(current.value, discipline)} <span className="text-xs font-normal text-minor-text">{current.value == null ? 'effort-led' : current.status}</span></summary>
     <div className="flex flex-col gap-3 mt-3 text-sm">
+      {candidate && <div className="rounded-lg bg-accent/12 p-2.5 text-xs text-main-text">
+        Your measured Assessment {discipline === 'bike' ? 'power' : 'pace'} ({formatFitness(candidate.value, discipline)}) is prefilled below. Review or edit it, then confirm only if it represents your current fitness.
+      </div>}
       {review && <p className="text-xs text-accent">{review}</p>}
       <label>{discipline === 'bike' ? 'FTP estimate (W)' : discipline === 'swim' ? 'Swim threshold / CSS estimate (min:sec per 100m)' : 'Running threshold estimate (min:sec per km)'}
         <input className={input} value={value} onChange={(e) => { setValue(e.target.value); setSaved(false) }} placeholder={discipline === 'bike' ? 'e.g. 220' : discipline === 'swim' ? 'e.g. 2:00' : 'e.g. 4:00'} /></label>
@@ -53,12 +72,15 @@ function FitnessDiscipline({ discipline, profile, onChange, sessions }) {
     </div>
   </details>
 }
-export default function FitnessSettings({ profile, onChange, sessions = [] }) {
-  return <details className="rounded-xl border border-minor-text/20 p-3 text-main-text">
-    <summary className="font-semibold text-sm cursor-pointer">Fitness estimates &amp; capacity</summary>
+export default function FitnessSettings({ profile, onChange, sessions = [], initiallyOpen = false, focusDiscipline = 'run' }) {
+  const [open, setOpen] = useState(initiallyOpen)
+  const missingRunEstimate = !hasValidFitnessEstimate(profile, 'run')
+  return <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)} className="rounded-xl border border-minor-text/20 p-3 text-main-text">
+    <summary className="font-semibold text-sm cursor-pointer">Fitness estimates &amp; capacity {missingRunEstimate && <span className="font-normal text-xs text-minor-text">· Run effort-led</span>}</summary>
     <div className="mt-3 flex flex-col gap-3">
+      {missingRunEstimate && <p className="rounded-lg bg-accent/12 p-2.5 text-xs text-main-text">No running pace estimate is confirmed. Plans will use time and effort guidance instead of pace; add an estimate here or log a measured pace in an Assessment session.</p>}
       {profile.onboardingThresholdDetails && <p className="text-xs text-minor-text">Earlier entry: {profile.onboardingThresholdDetails}. Confirm the relevant number below to use it; until then workouts remain effort-led.</p>}
-      {(profile.sport === 'triathlon' ? DISCIPLINES : ['run']).map((discipline) => <FitnessDiscipline key={discipline} discipline={discipline} profile={profile} onChange={onChange} sessions={sessions} />)}
+      {(profile.sport === 'triathlon' ? DISCIPLINES : ['run']).map((discipline) => <FitnessDiscipline key={discipline} discipline={discipline} profile={profile} onChange={onChange} sessions={sessions} initiallyOpen={initiallyOpen && discipline === focusDiscipline} />)}
       {profile.sport === 'triathlon' && <label className="text-sm">Pool access, days/week<select className={input} value={profile.onboardingPoolDaysPerWeek ?? ''} onChange={(e) => onChange({ onboardingPoolDaysPerWeek: e.target.value })}><option value="">Not specified (at most 2 swims)</option>{[0, 1, 2, 3, 4, 5, 6, 7].map((n) => <option key={n} value={n}>{n}</option>)}</select></label>}
       {profile.sport === 'triathlon' && <label className="text-sm">Can you follow cycling power targets?<select className={input} value={profile.bikePowerAvailable == null ? '' : String(profile.bikePowerAvailable)} onChange={(e) => onChange({ bikePowerAvailable: e.target.value === '' ? null : e.target.value === 'true' })}><option value="">Use existing equipment answer</option><option value="true">Yes — power meter or smart trainer</option><option value="false">No — use effort</option></select></label>}
     </div>

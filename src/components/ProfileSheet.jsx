@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Camera, Trash2 } from 'lucide-react'
 import Sheet from './Sheet'
 import ProfileAvatar from './ProfileAvatar'
@@ -32,13 +32,20 @@ function hasOngoingPlan(allSessions) {
   return blockEnd >= weekAgo
 }
 
-export default function ProfileSheet({ profile, allSessions, onClose }) {
+export default function ProfileSheet({ profile, allSessions, onClose, initialSection = null, initialDiscipline = 'run' }) {
   const [local, setLocal] = useState(profile)
   const [hasCompetition, setHasCompetition] = useState(!!profile.competitionDate)
   const [confirmingBlockReset, setConfirmingBlockReset] = useState(null) // { field, value, message } | null
   const [showingGoalNotice, setShowingGoalNotice] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [showingPictureSheet, setShowingPictureSheet] = useState(false)
+  const fitnessRef = useRef(null)
+
+  useEffect(() => {
+    if (initialSection !== 'fitness') return undefined
+    const timer = setTimeout(() => fitnessRef.current?.scrollIntoView({ block: 'start' }), 0)
+    return () => clearTimeout(timer)
+  }, [initialSection])
 
   const patch = async (fields) => {
     setLocal((l) => ({ ...l, ...fields }))
@@ -164,7 +171,10 @@ export default function ProfileSheet({ profile, allSessions, onClose }) {
         </div>
 
         <DistanceAndGoalSection sport={local.sport} values={values} onChange={onDistanceGoalChange} />
-        <FitnessSettings profile={local} onChange={patch} sessions={allSessions} />
+        <div ref={fitnessRef} className="scroll-mt-4">
+          <FitnessSettings profile={local} onChange={patch} sessions={allSessions}
+            initiallyOpen={initialSection === 'fitness'} focusDiscipline={initialDiscipline} />
+        </div>
 
         {showingGoalNotice && (
           <div className="p-3 rounded-xl bg-accent/12 flex items-center justify-between gap-2">

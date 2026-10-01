@@ -20,12 +20,12 @@ export function strengthFocuses(count) {
 const EXERCISE_SLOTS = {
   upperBody: ['upperPush', 'upperPull', 'shoulder', 'core'],
   lowerBody: ['squat', 'hinge', 'singleLeg', 'core'],
-  fullBody: ['squatOrHinge', 'upperPush', 'upperPull', 'singleLegOrCarry', 'core'],
+  fullBody: ['squatOrHinge', 'upperPush', 'upperPull', 'core'],
 }
 export const STRENGTH_SLOT_LABELS = {
   upperPush: 'upper-body push', upperPull: 'upper-body pull', shoulder: 'shoulder press/stability',
   squat: 'squat pattern', hinge: 'hip-hinge pattern', singleLeg: 'single-leg pattern',
-  squatOrHinge: 'squat or hip-hinge pattern', singleLegOrCarry: 'single-leg pattern or loaded carry',
+  squatOrHinge: 'lower-body compound pattern', singleLegOrCarry: 'single-leg pattern or loaded carry',
   core: 'core/abs finisher',
 }
 export function strengthExerciseSlots(focus, mode = 'normal') {
@@ -48,14 +48,45 @@ const completedLoad = (session, set) => set?.isCompleted && !set?.isSkipped
   && Number.isFinite(set.weightKg) && set.weightKg > 0
   && session.strengthPrescription?.mode === 'normal'
 
-export function strengthLoadPlan({ prescription, history = [], checkIn = {} }) {
+// Six familiar choices per focus, four per session; preserve movement balance.
+const POOLS = {
+  gym: {
+    upperBody: [['Bench press', 'Push-up'], ['Seated row', 'Lat pulldown'], ['Dumbbell shoulder press'], ['Dead bug']],
+    lowerBody: [['Squat', 'Goblet squat'], ['Romanian deadlift'], ['Reverse lunge', 'Step-up'], ['Dead bug']],
+    fullBody: [['Goblet squat', 'Romanian deadlift'], ['Bench press', 'Push-up'], ['Seated row'], ['Dead bug']],
+  },
+  bodyweight: {
+    upperBody: [['Push-up', 'Incline push-up'], ['Prone W raise', 'Reverse snow angel'], ['Wall slide'], ['Dead bug']],
+    lowerBody: [['Bodyweight squat', 'Chair squat'], ['Glute bridge'], ['Reverse lunge', 'Split squat'], ['Dead bug']],
+    fullBody: [['Bodyweight squat', 'Glute bridge'], ['Push-up', 'Incline push-up'], ['Prone W raise'], ['Dead bug']],
+  },
+}
+export function strengthExerciseSelection(prescription, history = [], rotation = 0) {
+  const pool = POOLS[prescription.equipment][prescription.focus].map(choices => [...choices])
+  const selected = {}
+  prescription.exerciseSlots.forEach((slot, index) => {
+    const completed = history.filter(s => s.discipline === 'gym'
+      && s.strengthPrescription?.equipment === prescription.equipment)
+      .flatMap(s => (s.sets ?? []).filter(set => set.isCompleted && !set.isSkipped && set.exercise
+        && (set.slot === slot || (slot === 'squatOrHinge' && ['squat', 'hinge', 'singleLeg'].includes(set.slot))))
+        .map(set => ({ date: s.date, set })))
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+    const added = completed.filter(row => row.set.athleteAdded).at(-1)?.set.exercise
+    if (added && !pool[index].some(name => exerciseKey(name) === exerciseKey(added))) pool[index][pool[index].length - 1] = added
+    selected[slot] = prescription.mode !== 'normal' && completed.length
+      ? completed.at(-1).set.exercise : pool[index][Math.abs(rotation) % pool[index].length]
+  })
+  return selected
+}
+
+export function strengthLoadPlan({ prescription, history = [], checkIn = {}, selectedExercises = {} }) {
   return prescription.exerciseSlots.map(slot => {
     const evidence = history.filter(session => session.discipline === 'gym')
-      .flatMap(session => (session.sets ?? []).filter(set => (set.slot === slot || (set.athleteAdded && ((slot === 'squatOrHinge' && ['squat', 'hinge'].includes(set.slot)) || (slot === 'singleLegOrCarry' && set.slot === 'singleLeg')))) && set.exercise && (!set.athleteAdded || (set.isCompleted && !set.isSkipped)))
+      .flatMap(session => (session.sets ?? []).filter(set => (set.slot === slot || (set.athleteAdded && ((slot === 'squatOrHinge' && ['squat', 'hinge', 'singleLeg'].includes(set.slot)) || (slot === 'singleLegOrCarry' && set.slot === 'singleLeg')))) && set.exercise && (!set.athleteAdded || (set.isCompleted && !set.isSkipped)))
         .map(set => ({ session, set })))
       .sort((a, b) => String(a.session.date).localeCompare(String(b.session.date)))
     const latest = evidence.at(-1)
-    const preferredExercise = latest?.set.exercise ?? null
+    const preferredExercise = selectedExercises[slot] ?? latest?.set.exercise ?? null
     const sameExercise = evidence.filter(row => exerciseKey(row.set.exercise) === exerciseKey(preferredExercise))
     // Recovery/taper loads are temporary derivatives of the normal working
     // baseline. They remain useful log data but must never become that baseline
@@ -216,7 +247,10 @@ export function placeStrengthWeek({ profile, week, checkIn, endurance, priorStre
   if (chosen.some((s) => endurance.some((e) => gap(s.date, e.date) === 0 && e.role === 'quality'))) {
     policy.messages.push('A strength session shares a quality day: complete the endurance workout first and separate sessions where possible.')
   }
-  const sessions = chosen.sort((a, b) => a.date.localeCompare(b.date)).map(session => ({ ...session,
-    strengthLoadPlan: strengthLoadPlan({ prescription: session.strengthPrescription, history, checkIn }) }))
+  const sessions = chosen.sort((a, b) => a.date.localeCompare(b.date)).map((session, index) => {
+    const past = history.filter(s => String(s.date).slice(0, 10) < session.date)
+    const selectedExercises = strengthExerciseSelection(session.strengthPrescription, past, (week.weekNumber ?? 1) + index)
+    return { ...session, strengthLoadPlan: strengthLoadPlan({ prescription: session.strengthPrescription, history: past, checkIn, selectedExercises }) }
+  })
   return { sessions, strengthPlan: { ...policy, scheduledSessions: sessions.length } }
 }

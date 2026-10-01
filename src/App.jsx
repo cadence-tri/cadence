@@ -25,12 +25,23 @@ function MainTabView({ profile }) {
   const [tab, setTab] = useState('daily')
   const [selectedSession, setSelectedSession] = useState(null)
   const [showingProfile, setShowingProfile] = useState(false)
+  const [profileTarget, setProfileTarget] = useState({ section: null, discipline: 'run' })
   const [showingManualEntry, setShowingManualEntry] = useState(false)
   const [manualEntryDate, setManualEntryDate] = useState(new Date())
   const [showingWizard, setShowingWizard] = useState(false)
 
   const allSessions = useLiveQuery(() => db.sessions.orderBy('date').toArray(), [], [])
   const weekPhases = useLiveQuery(() => db.weekPhases.toArray(), [], [])
+
+  const openProfile = (section = null, discipline = 'run') => {
+    setProfileTarget({ section: typeof section === 'string' ? section : null, discipline })
+    setShowingProfile(true)
+  }
+
+  const closeProfile = () => {
+    setShowingProfile(false)
+    setProfileTarget({ section: null, discipline: 'run' })
+  }
 
   const openManualEntry = (date = new Date()) => {
     setManualEntryDate(date)
@@ -44,7 +55,7 @@ function MainTabView({ profile }) {
           <DailyScreen
             profile={profile}
             onOpenSession={setSelectedSession}
-            onOpenProfile={() => setShowingProfile(true)}
+            onOpenProfile={openProfile}
             onOpenWizard={() => setShowingWizard(true)}
             onOpenManualEntry={openManualEntry}
           />
@@ -69,7 +80,7 @@ function MainTabView({ profile }) {
         {TABS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
-            onClick={() => (id === 'profile' ? setShowingProfile(true) : setTab(id))}
+            onClick={() => (id === 'profile' ? openProfile() : setTab(id))}
             className="flex-1 flex flex-col items-center gap-0.5 py-2.5"
             aria-current={(id === 'profile' ? showingProfile : tab === id) ? 'page' : undefined}
           >
@@ -85,8 +96,9 @@ function MainTabView({ profile }) {
         ))}
       </nav>
 
-      {selectedSession && <SessionDetailSheet session={selectedSession} onClose={() => setSelectedSession(null)} />}
-      {showingProfile && <ProfileSheet profile={profile} allSessions={allSessions} onClose={() => setShowingProfile(false)} />}
+      {selectedSession && <SessionDetailSheet session={selectedSession} onClose={() => setSelectedSession(null)}
+        onReviewFitness={() => { const discipline = selectedSession.discipline; setSelectedSession(null); openProfile('fitness', discipline) }} />}
+      {showingProfile && <ProfileSheet profile={profile} allSessions={allSessions} initialSection={profileTarget.section} initialDiscipline={profileTarget.discipline} onClose={closeProfile} />}
       {showingManualEntry && (
         <ManualEntrySheet initialDate={manualEntryDate} onClose={() => setShowingManualEntry(false)} />
       )}

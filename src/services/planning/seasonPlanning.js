@@ -1,6 +1,7 @@
 import { addDays, asDate, startOfWeekMon, toISODateString } from '../dateUtils.js'
 import { dayGap, normalizeFitness, normalizeWorkoutResult } from './fitness.js'
 import { parseDurationSeconds, recoveryFactor, lifestyleFactor } from './planRules.js'
+import { durationMinutes } from '../../db/session.js'
 
 // Product targets informed by published plans, not guaranteed outcomes or
 // hard physiological limits. A goal alone never establishes current capacity.
@@ -12,7 +13,25 @@ export const fullyDone = s => s.sets?.length
 export function disciplineKm(s, discipline) {
   if (s.isRace || s.endurancePrescription?.purpose === 'race') return 0
   const result = normalizeWorkoutResult(s.workoutResult)
-  if (s.discipline === discipline) return result?.actualDistanceKm ?? (discipline === 'swim' ? Number(s.totalDistance) / 1000 : Number(s.totalDistance))
+  if (s.discipline === discipline && result?.actualDistanceKm != null) return result.actualDistanceKm
+  const steps = (s.sets ?? []).filter(step => s.discipline === discipline || (s.discipline === 'brick' && step.discipline === discipline))
+  if (steps.length && (s.prescriptionEdited || steps.every(step => Number(step.distanceM) > 0))) {
+    // Actual edited distances take precedence over the immutable prescription.
+    // Never infer pace improvement from these workload-only observations.
+    return steps.filter(step => step.isCompleted && !step.isSkipped)
+      .reduce((km, step) => {
+        if (Number(step.distanceM) > 0) return km + Number(step.distanceM) * (step.setsCount ?? 1) / 1000
+        // Time-only parts remain estimates at the already-prescribed pace;
+        // an unknown pace must not be manufactured from a distance edit.
+        const seconds = (durationMinutes(step) ?? 0) * 60
+        const pace = step.target?.high
+        const estimated = seconds > 0 && pace > 0 && discipline !== 'bike'
+          ? seconds / pace * (discipline === 'swim' ? 0.1 : 1) : 0
+        return km + estimated * (step.setsCount ?? 1)
+      }, 0)
+  }
+  if (s.prescriptionEdited) return 0 // Unknown edited distance is not the original distance.
+  if (s.discipline === discipline) return discipline === 'swim' ? Number(s.totalDistance) / 1000 : Number(s.totalDistance)
   if (s.discipline === 'brick') return s.endurancePrescription?.legDistancesKm?.[discipline] ?? s.brickTargets?.[`${discipline}Km`] ?? 0
   return 0
 }

@@ -114,6 +114,26 @@ export function resolveFitness(profile, discipline, history = [], today = new Da
             : 'Personal estimate: conservative calibration; completion alone does not verify pace/power.' }
 }
 
+export function hasValidFitnessEstimate(profile, discipline) {
+  return normalizeFitness(profile?.trainingFitness)[discipline]?.value != null
+}
+
+/** A completed controlled Assessment can prefill a review, but it never
+ * changes the stored baseline until the athlete explicitly confirms it. */
+export function assessmentCandidate(profile, discipline, history = [], today = new Date()) {
+  if (hasValidFitnessEstimate(profile, discipline)) return null
+  const evidence = evidenceFor(history, discipline, today)
+    .find((entry) => entry.prescription.purpose === 'assessment'
+      && successfulEvidence(entry) && entry.result.actualValue != null)
+  if (!evidence) return null
+  const assessed = calendarDay(evidence.session.date)
+  return {
+    value: evidence.result.actualValue,
+    assessedOn: assessed ? toISODateString(assessed) : null,
+    sessionId: evidence.session.id ?? null,
+  }
+}
+
 // A candidate is deliberately a review request, not a newly asserted threshold.
 export function baselineReview(profile, discipline, history, today = new Date()) {
   const state = resolveFitness(profile, discipline, history, today)
@@ -143,10 +163,11 @@ export function fitnessFingerprint(profile) {
     strength: [profile.strengthSessionsPerWeek, profile.excludeGymSessions, profile.bodyweightOnlyStrength] })
 }
 export function evidenceFingerprint(history, today = new Date()) {
-  return JSON.stringify(history.filter((s) => s.endurancePrescription && dayGap(s.date, today) >= 0 && dayGap(s.date, today) <= 42
-    && (s.workoutResult || (s.sets?.length && s.sets.every((set) => set.isCompleted && !set.isSkipped))))
+  return JSON.stringify(history.filter((s) => (s.endurancePrescription || s.discipline === 'gym') && dayGap(s.date, today) >= 0 && dayGap(s.date, today) <= 42
+    && (s.workoutResult || (s.sets?.length && s.sets.some((set) => set.isCompleted && !set.isSkipped))))
     .map((s) => ({ key: s.importKey ?? `${s.date}|${s.discipline}|${s.title}`, date: s.date,
-      result: normalizeWorkoutResult(s.workoutResult), edited: !!s.prescriptionEdited, family: s.endurancePrescription.family,
-      stage: s.endurancePrescription.loadStage, completed: s.sets?.every((set) => set.isCompleted && !set.isSkipped) ?? false }))
+      result: normalizeWorkoutResult(s.workoutResult), edited: !!s.prescriptionEdited, family: s.endurancePrescription?.family,
+      execution: (s.sets ?? []).map(set => [set.exercise, set.slot, set.weightKg, set.reps, set.distanceM, set.durationSeconds, set.duration, set.setsCount, set.isCompleted, set.isSkipped]),
+      stage: s.endurancePrescription?.loadStage, completed: s.sets?.every((set) => set.isCompleted && !set.isSkipped) ?? false }))
     .sort((a, b) => a.key.localeCompare(b.key)))
 }

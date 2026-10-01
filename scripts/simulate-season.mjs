@@ -20,7 +20,7 @@ export function coachFixture(skeleton) {
     id: `S${i + 1}`, title: s.isRace ? 'Race day' : `${s.discipline} ${s.endurancePrescription?.purpose ?? s.strengthPrescription?.focus ?? s.role}`,
     notes: 'Synthetic diagnostic fixture, not an AI coaching recommendation.',
     ...(s.strengthPrescription ? { sets: s.strengthPrescription.exerciseSlots.map(slot => ({
-      slot, exercise: `${slot} fixture`, setsCount: slot === 'core' ? s.strengthPrescription.coreSets : s.strengthPrescription.workSetsMin,
+      slot, exercise: s.strengthLoadPlan?.find(item => item.slot === slot)?.preferredExercise ?? `${slot} fixture`, setsCount: slot === 'core' ? s.strengthPrescription.coreSets : s.strengthPrescription.workSetsMin,
       ...(slot === 'core' ? { duration: '30 seconds' } : { reps: 8 }), rest: slot === 'core' ? '30 seconds' : '90 seconds',
     })) } : {}) })) }
 }

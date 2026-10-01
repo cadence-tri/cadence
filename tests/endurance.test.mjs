@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { buildPlanSkeleton } from '../src/services/planning/planScheduler.js'
 import { validateSkeleton, validateGeneratedPlan, mergeGeneratedWithSkeleton } from '../src/services/planning/planValidator.js'
 import { parseMarkdown, importMarkdown } from '../src/services/markdownImporter.js'
-import { normalizeFitness, paceSeconds, updateFitness, resolveFitness, normalizeWorkoutResult, evidenceFor, baselineReview, dayGap, fitnessFingerprint } from '../src/services/planning/fitness.js'
+import { normalizeFitness, paceSeconds, updateFitness, resolveFitness, normalizeWorkoutResult, evidenceFor, baselineReview, assessmentCandidate, hasValidFitnessEstimate, dayGap, fitnessFingerprint } from '../src/services/planning/fitness.js'
 import { canonicalEnduranceSets, swimSessionCap, swimDrillSelection, SWIM_DRILLS, WORK_STAGES } from '../src/services/planning/endurancePlanning.js'
 import { runningPaceTargets, triathlonNumericTargets } from '../src/services/planning/planRules.js'
 import { sessionDistanceKmForDisplay, durationMinutes, withAllSetsCompleted } from '../src/db/session.js'
@@ -203,12 +203,28 @@ test('assessment preference changes purpose without adding a hard session', () =
   assert.ok(all(no).some((s) => s.endurancePrescription?.purpose === 'development'))
 })
 
+test('a measured Assessment pace becomes a review candidate but never a baseline automatically', () => {
+  const profile = p()
+  assert.equal(hasValidFitnessEstimate(profile, 'run'), false)
+  const assessment = all(build(profile, [], { assessment: 'offer' }))
+    .find((s) => s.discipline === 'run' && s.endurancePrescription?.purpose === 'assessment')
+  const logged = feedbackSession('run', '2026-08-25', assessment.endurancePrescription, { actualValue: 310 })
+  const candidate = assessmentCandidate(profile, 'run', [logged], today)
+  assert.deepEqual(candidate, { value: 310, assessedOn: '2026-08-25', sessionId: null })
+  assert.equal(resolveFitness(profile, 'run', [logged], today).workingValue, null)
+  assert.equal(assessmentCandidate(profile, 'run', [{ ...logged, workoutResult: { ...logged.workoutResult, feel: 'tooHard' } }], today), null)
+  assert.equal(assessmentCandidate(p({ trainingFitness: { run: baseline(300) } }), 'run', [logged], today), null)
+})
+
 test('race-specific sessions replace existing quality slots and never force an unsupported goal', () => {
   const profile = p({ competitionDate: '2026-10-18', trainingFitness: { run: baseline(240) }, goalOverallTime: '2:10:00' })
   const skeleton = build(profile)
   const race = all(skeleton).filter((s) => s.endurancePrescription?.purpose === 'raceSpecific')
   assert.ok(race.length)
   assert.ok(race.every((s) => !s.endurancePrescription.goalUsed && s.endurancePrescription.target.low >= 240))
+  assert.ok(race.every(s => s.endurancePrescription.family === 'run:raceSpecific:distance-v1'))
+  assert.ok(race.some(s => s.endurancePrescription.steps.some(step => step.stepType === 'work' && step.distanceM === 1000)))
+  assert.deepEqual(validateSkeleton(skeleton, profile).errors, [])
 })
 
 test('recovery swim volume deloads against session capacity, not just the old inflated weekly range', () => {

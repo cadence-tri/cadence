@@ -16,6 +16,11 @@ export function cleanNumber(n) {
 export function durationMinutes(set) {
   if (Number.isFinite(set?.durationSeconds) && set.durationSeconds >= 0) return set.durationSeconds / 60
   if (!set?.duration) return null
+  const text = String(set.duration).trim().toLowerCase()
+  const clock = text.match(/^(\d+):(\d{1,2})(?::(\d{1,2}))?$/)
+  if (clock) return clock[3] == null ? Number(clock[1]) + Number(clock[2]) / 60 : Number(clock[1]) * 60 + Number(clock[2]) + Number(clock[3]) / 60
+  const units = [...text.matchAll(/(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\b/g)]
+  if (units.length) return units.reduce((sum, [, value, unit]) => sum + Number(value) * (unit.startsWith('h') ? 60 : unit.startsWith('s') ? 1 / 60 : 1), 0)
   const normalized = String(set.duration).replace(/[–-]/g, ' ')
   const numbers = normalized
     .split(/[^0-9.]+/)

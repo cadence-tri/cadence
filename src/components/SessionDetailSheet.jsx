@@ -391,7 +391,7 @@ function DayPicker({ date, onPick }) {
  * and athlete feedback. Ported from SessionDetailView.swift, plus a
  * within-week day picker (PWA-only addition, see `DayPicker`'s doc
  * comment). */
-export default function SessionDetailSheet({ session, onClose }) {
+export default function SessionDetailSheet({ session, onClose, onReviewFitness }) {
   const [isEditing, setIsEditing] = useState(false)
   const [adding, setAdding] = useState(false)
   const [local, setLocal] = useState(session)
@@ -440,6 +440,9 @@ export default function SessionDetailSheet({ session, onClose }) {
   }
 
   const editSet = (index, newSet) => {
+    const previous = local.sets[index]
+    if (newSet.duration !== previous.duration) newSet = { ...newSet, durationSeconds: null, distanceM: null }
+    if (newSet.distanceM !== previous.distanceM && newSet.distanceM != null) newSet = { ...newSet, durationSeconds: null, duration: null }
     const sets = local.sets.map((s, i) => (i === index ? newSet : s))
     setLocal({ ...local, sets, workoutResult: null, prescriptionEdited: !!local.endurancePrescription })
     // Debounce-free write on every keystroke is fine at this scale.
@@ -554,7 +557,7 @@ export default function SessionDetailSheet({ session, onClose }) {
         )}
 
         {local.prescriptionEdited && local.originalPrescription && <details className="text-xs text-minor-text"><summary className="cursor-pointer">Original plan (before your edits)</summary><p className="mt-2">This modified workout remains in your log but does not automatically advance the original workout family.</p>{local.originalPrescription.map((s, i) => <p key={i} className="mt-1">{setSummary(s)}</p>)}</details>}
-        <WorkoutResultForm key={`${local.id}:${local.workoutResult?.recordedAt ?? 'unreported'}`} session={local} onSave={persist} />
+        <WorkoutResultForm key={`${local.id}:${local.workoutResult?.recordedAt ?? 'unreported'}`} session={local} onSave={persist} onReviewFitness={onReviewFitness} />
         <div>
           <div className="text-xs font-semibold text-minor-text uppercase tracking-wide mb-2">Your feedback</div>
           <textarea
